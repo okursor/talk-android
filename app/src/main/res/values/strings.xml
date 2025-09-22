@@ -59,6 +59,43 @@ How to translate with transifex:
     <string name="nc_image_compression_strong">Strong</string>
     <string name="nc_image_compression_strong_description">Noticeable size reduction for quick sharing (max 1280x1280, 80% quality)</string>
 
+    <!-- Video compression settings -->
+    <string name="nc_settings_video_compression">Video compression</string>
+    <string name="nc_settings_video_compression_summary">Compress videos before upload to reduce file size</string>
+    <string name="nc_settings_video_compression_level">Compression level</string>
+    <string name="nc_settings_video_compression_level_summary">Choose the level of compression for uploaded videos</string>
+
+    <!-- Video compression levels -->
+    <string name="nc_video_compression_none">None</string>
+    <string name="nc_video_compression_none_description">Upload original videos without compression</string>
+    <string name="nc_video_compression_light">Light</string>
+    <string name="nc_video_compression_light_description">High quality HD video with moderate size reduction (720p, 2000 kbps)</string>
+    <string name="nc_video_compression_medium">Medium</string>
+    <string name="nc_video_compression_medium_description">Good balance between quality and size (480p, 1000 kbps)</string>
+    <string name="nc_video_compression_strong">Strong</string>
+    <string name="nc_video_compression_strong_description">Maximum size reduction for quick sharing (360p, 500 kbps)</string>
+
+    <!-- Video compression progress -->
+    <string name="nc_video_compression_progress_title">Video wird komprimiert</string>
+    <string name="nc_video_compression_starting">Starte Komprimierung von %1$s</string>
+    <string name="nc_video_compression_frames">Frame %1$d von %2$d</string>
+    <string name="nc_video_compression_size">Größe: %1$s von %2$s</string>
+    <string name="nc_video_compression_final_size">Von %1$s auf %2$s komprimiert (%3$d%% kleiner)</string>
+    <string name="nc_video_compression_time_remaining">Verbleibende Zeit: %1$s</string>
+    <string name="nc_video_compression_completed">Komprimierung abgeschlossen!</string>
+    <string name="nc_video_compression_completed_time">Video erfolgreich komprimiert</string>
+    <string name="nc_video_compression_failed">Komprimierung fehlgeschlagen: %1$s</string>
+    <string name="nc_video_compression_failed_time">Bitte versuchen Sie es erneut</string>
+
+    <!-- Video compression notifications -->
+    <string name="nc_video_compression_notification_title">Video wird komprimiert</string>
+    <string name="nc_video_compression_notification_starting">Starte Komprimierung von %1$s</string>
+    <string name="nc_video_compression_notification_progress">Komprimiere %1$s (%2$d%%)</string>
+    <string name="nc_video_compression_notification_completed">Video komprimiert</string>
+    <string name="nc_video_compression_notification_completed_text">%1$s erfolgreich auf %2$s komprimiert (%3$d%% kleiner)</string>
+    <string name="nc_video_compression_notification_failed">Komprimierung fehlgeschlagen</string>
+    <string name="nc_video_compression_notification_failed_text">Komprimierung von %1$s fehlgeschlagen</string>
+
     <!-- Server selection -->
     <string name="nc_server_connect">Test server connection</string>
     <string name="nc_server_helper_text">The link to your %1$s web interface when you open it in the browser.</string>

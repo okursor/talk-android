@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+ * Nextcloud Talk - Android Client
+ *
+ * SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <!-- Progress Bar -->
+    <ProgressBar
+        android:id="@+id/compression_progress_bar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:max="100"
+        android:progress="0" />
+
+    <!-- Progress Text -->
+    <TextView
+        android:id="@+id/compression_progress_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:gravity="center"
+        android:text="@string/nc_video_compression_starting"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <!-- Frame Information -->
+    <TextView
+        android:id="@+id/compression_frame_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:gravity="center"
+        android:text="@string/nc_video_compression_frames"
+        android:textSize="14sp" />
+
+    <!-- Size Information -->
+    <TextView
+        android:id="@+id/compression_size_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:gravity="center"
+        android:text="@string/nc_video_compression_size"
+        android:textSize="14sp" />
+
+    <!-- Time Remaining -->
+    <TextView
+        android:id="@+id/compression_time_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:text="@string/nc_video_compression_time_remaining"
+        android:textSize="14sp"
+        android:textStyle="italic" />
+
+</LinearLayout>

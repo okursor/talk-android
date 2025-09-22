@@ -18,7 +18,14 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
 import android.webkit.MimeTypeMap
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import com.nextcloud.talk.models.ImageCompressionLevel
+import com.nextcloud.talk.models.VideoCompressionLevel
+import com.nextcloud.talk.interfaces.VideoCompressionProgressCallback
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
@@ -32,6 +39,7 @@ object FileUtils {
     private val TAG = FileUtils::class.java.simpleName
     private const val RADIX: Int = 16
     private const val MD5_LENGTH: Int = 32
+    private const val TIMEOUT_USEC: Long = 10000
 
     /**
      * Creates a new [File]
@@ -185,6 +193,24 @@ object FileUtils {
     fun isImageFile(context: Context, uri: Uri): Boolean {
         val mimeType = context.contentResolver.getType(uri)
         return mimeType?.startsWith("image/") == true
+    }
+
+    /**
+     * Determines if the given file is a video based on its MIME type
+     */
+    @JvmStatic
+    fun isVideoFile(file: File): Boolean {
+        val mimeType = getMimeType(file)
+        return mimeType?.startsWith("video/") == true
+    }
+
+    /**
+     * Determines if the given URI is a video based on its MIME type
+     */
+    @JvmStatic
+    fun isVideoFile(context: Context, uri: Uri): Boolean {
+        val mimeType = context.contentResolver.getType(uri)
+        return mimeType?.startsWith("video/") == true
     }
 
     /**
@@ -501,4 +527,374 @@ object FileUtils {
      * Checks if a bitmap has transparency
      */
     private fun hasTransparency(bitmap: Bitmap): Boolean = bitmap.hasAlpha() && bitmap.config == Bitmap.Config.ARGB_8888
+
+    /**
+     * Compresses a video file with specified parameters
+     * @param inputFile The original video file
+     * @param outputFile The file where the compressed video will be saved
+     * @param videoBitrate Video bitrate in kbps
+     * @param audioBitrate Audio bitrate in kbps
+     * @param maxWidth Maximum width in pixels
+     * @param maxHeight Maximum height in pixels
+     * @param frameRate Target frame rate
+     * @param progressCallback Optional callback for progress updates
+     * @return true if compression was successful, false otherwise
+     */
+    @JvmStatic
+    fun compressVideoFile(
+        inputFile: File,
+        outputFile: File,
+        videoBitrate: Int,
+        audioBitrate: Int,
+        maxWidth: Int,
+        maxHeight: Int,
+        frameRate: Int,
+        progressCallback: VideoCompressionProgressCallback? = null
+    ): Boolean =
+        try {
+            compressVideoWithMediaCodec(
+                inputFile.absolutePath,
+                outputFile.absolutePath,
+                videoBitrate,
+                audioBitrate,
+                maxWidth,
+                maxHeight,
+                frameRate,
+                progressCallback
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Video compression failed", e)
+            progressCallback?.onCompressionFailed("Video compression failed: ${e.message}", e)
+            false
+        }
+
+    /**
+     * Compresses a video file using MediaCodec and MediaMuxer
+     */
+    @Suppress("LongParameterList")
+    private fun compressVideoWithMediaCodec(
+        inputPath: String,
+        outputPath: String,
+        targetVideoBitrate: Int,
+        targetAudioBitrate: Int,
+        maxWidth: Int,
+        maxHeight: Int,
+        frameRate: Int,
+        progressCallback: VideoCompressionProgressCallback? = null
+    ): Boolean {
+        var extractor: MediaExtractor? = null
+        var muxer: MediaMuxer? = null
+        var videoDecoder: MediaCodec? = null
+        var videoEncoder: MediaCodec? = null
+        var audioDecoder: MediaCodec? = null
+        var audioEncoder: MediaCodec? = null
+
+        try {
+            // Get original file size for progress tracking
+            val originalFile = File(inputPath)
+            val originalSizeBytes = originalFile.length()
+
+            progressCallback?.onCompressionStarted()
+
+            // Initialize MediaExtractor
+            extractor = MediaExtractor()
+            extractor.setDataSource(inputPath)
+
+            // Find video and audio tracks
+            var videoTrackIndex = -1
+            var audioTrackIndex = -1
+            var videoFormat: MediaFormat? = null
+            var audioFormat: MediaFormat? = null
+
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mimeType = format.getString(MediaFormat.KEY_MIME) ?: continue
+
+                when {
+                    mimeType.startsWith("video/") && videoTrackIndex == -1 -> {
+                        videoTrackIndex = i
+                        videoFormat = format
+                    }
+                    mimeType.startsWith("audio/") && audioTrackIndex == -1 -> {
+                        audioTrackIndex = i
+                        audioFormat = format
+                    }
+                }
+            }
+
+            if (videoTrackIndex == -1) {
+                Log.e(TAG, "No video track found")
+                return false
+            }
+
+            // Get original video dimensions
+            val originalWidth = videoFormat!!.getInteger(MediaFormat.KEY_WIDTH)
+            val originalHeight = videoFormat.getInteger(MediaFormat.KEY_HEIGHT)
+
+            // Estimate total frames for progress tracking
+            val videoDurationUs = if (videoFormat.containsKey(MediaFormat.KEY_DURATION)) {
+                videoFormat.getLong(MediaFormat.KEY_DURATION)
+            } else {
+                0L
+            }
+            val videoFrameRate = if (videoFormat.containsKey(MediaFormat.KEY_FRAME_RATE)) {
+                videoFormat.getInteger(MediaFormat.KEY_FRAME_RATE)
+            } else {
+                30 // Default assumption
+            }
+            val estimatedTotalFrames = if (videoDurationUs > 0) {
+                (videoDurationUs * videoFrameRate / 1_000_000).toInt()
+            } else {
+                1000 // Fallback estimate
+            }
+
+            // Calculate new dimensions maintaining aspect ratio
+            val (newWidth, newHeight) = calculateNewDimensions(originalWidth, originalHeight, maxWidth, maxHeight)
+
+            Log.d(TAG, "Original: ${originalWidth}x$originalHeight, Target: ${newWidth}x$newHeight")
+            Log.d(TAG, "Estimated frames: $estimatedTotalFrames, Duration: ${videoDurationUs / 1_000_000}s")
+
+            // Create output format for video
+            val outputVideoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, newWidth, newHeight)
+            outputVideoFormat.setInteger(
+                MediaFormat.KEY_COLOR_FORMAT,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+            )
+            outputVideoFormat.setInteger(MediaFormat.KEY_BIT_RATE, targetVideoBitrate * 1000) // Convert to bps
+            outputVideoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
+            outputVideoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+
+            // Create MediaMuxer
+            muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+            // Setup video encoder
+            videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            videoEncoder.configure(outputVideoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val surface = videoEncoder.createInputSurface()
+            videoEncoder.start()
+
+            // Setup video decoder
+            videoDecoder = MediaCodec.createDecoderByType(videoFormat.getString(MediaFormat.KEY_MIME)!!)
+            videoDecoder.configure(videoFormat, surface, null, 0)
+            videoDecoder.start()
+
+            extractor.selectTrack(videoTrackIndex)
+
+            // Process video
+            val videoTrackIndexOutput = muxer.addTrack(outputVideoFormat)
+            var muxerStarted = false
+
+            val bufferInfo = MediaCodec.BufferInfo()
+            var inputDone = false
+            var outputDone = false
+            var processedFrames = 0
+            var lastProgressUpdate = System.currentTimeMillis()
+            val progressUpdateInterval = 500 // Update every 500ms
+
+            while (!outputDone) {
+                // Feed input to decoder
+                if (!inputDone) {
+                    val inputBufferIndex = videoDecoder.dequeueInputBuffer(TIMEOUT_USEC)
+                    if (inputBufferIndex >= 0) {
+                        val inputBuffer = videoDecoder.getInputBuffer(inputBufferIndex)!!
+                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                        if (sampleSize >= 0) {
+                            videoDecoder.queueInputBuffer(
+                                inputBufferIndex,
+                                0,
+                                sampleSize,
+                                extractor.sampleTime,
+                                0
+                            )
+                            extractor.advance()
+                        } else {
+                            videoDecoder.queueInputBuffer(
+                                inputBufferIndex,
+                                0,
+                                0,
+                                0,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            )
+                            inputDone = true
+                        }
+                    }
+                }
+
+                // Get output from encoder
+                val outputBufferIndex = videoEncoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC)
+                when {
+                    outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        // No output available yet
+                    }
+                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        if (muxerStarted) {
+                            throw RuntimeException("Format changed twice")
+                        }
+                        val newFormat = videoEncoder.outputFormat
+                        muxer.addTrack(newFormat)
+                        muxer.start()
+                        muxerStarted = true
+                    }
+                    outputBufferIndex >= 0 -> {
+                        val outputBuffer = videoEncoder.getOutputBuffer(outputBufferIndex)!!
+                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                            bufferInfo.size = 0
+                        }
+                        if (bufferInfo.size != 0 && muxerStarted) {
+                            outputBuffer.position(bufferInfo.offset)
+                            outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                            muxer.writeSampleData(videoTrackIndexOutput, outputBuffer, bufferInfo)
+
+                            // Update progress tracking
+                            processedFrames++
+
+                            // Report progress periodically to avoid too frequent updates
+                            val currentTime = System.currentTimeMillis()
+                            if (currentTime - lastProgressUpdate >= progressUpdateInterval) {
+                                val progress = if (estimatedTotalFrames > 0) {
+                                    kotlin.math.min(99, (processedFrames * 100 / estimatedTotalFrames))
+                                } else {
+                                    kotlin.math.min(99, processedFrames % 100)
+                                }
+
+                                // Estimate current compressed size
+                                val outputFile = File(outputPath)
+                                val currentCompressedSize = if (outputFile.exists()) outputFile.length() else 0L
+
+                                progressCallback?.onProgressUpdate(
+                                    progress,
+                                    processedFrames,
+                                    estimatedTotalFrames,
+                                    originalSizeBytes,
+                                    currentCompressedSize
+                                )
+
+                                lastProgressUpdate = currentTime
+
+                                Log.d(TAG, "Progress: $progress% ($processedFrames/$estimatedTotalFrames frames)")
+                            }
+                        }
+                        videoEncoder.releaseOutputBuffer(outputBufferIndex, false)
+                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            outputDone = true
+                        }
+                    }
+                }
+            }
+
+            Log.d(TAG, "Video compression completed successfully")
+
+            // Report final completion with actual file sizes
+            val outputFile = File(outputPath)
+            val finalCompressedSize = outputFile.length()
+            val compressionRatio = if (originalSizeBytes > 0) {
+                ((originalSizeBytes - finalCompressedSize) * 100 / originalSizeBytes).toInt()
+            } else {
+                0
+            }
+
+            progressCallback?.onCompressionCompleted(
+                originalSizeBytes,
+                finalCompressedSize,
+                compressionRatio
+            )
+
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during video compression", e)
+            progressCallback?.onCompressionFailed("Compression failed: ${e.message}", e)
+            return false
+        } finally {
+            // Clean up resources
+            try {
+                extractor?.release()
+                muxer?.stop()
+                muxer?.release()
+                videoDecoder?.stop()
+                videoDecoder?.release()
+                videoEncoder?.stop()
+                videoEncoder?.release()
+                audioDecoder?.stop()
+                audioDecoder?.release()
+                audioEncoder?.stop()
+                audioEncoder?.release()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cleaning up resources", e)
+            }
+        }
+    }
+
+    /**
+     * Calculates new video dimensions while maintaining aspect ratio
+     */
+    private fun calculateNewDimensions(
+        originalWidth: Int,
+        originalHeight: Int,
+        maxWidth: Int,
+        maxHeight: Int
+    ): Pair<Int, Int> {
+        if (originalWidth <= maxWidth && originalHeight <= maxHeight) {
+            return Pair(originalWidth, originalHeight)
+        }
+
+        val aspectRatio = originalWidth.toFloat() / originalHeight.toFloat()
+
+        val newWidth: Int
+        val newHeight: Int
+
+        if (aspectRatio > 1.0f) { // Landscape
+            newWidth = minOf(originalWidth, maxWidth)
+            newHeight = (newWidth / aspectRatio).toInt()
+        } else { // Portrait or square
+            newHeight = minOf(originalHeight, maxHeight)
+            newWidth = (newHeight * aspectRatio).toInt()
+        }
+
+        // Ensure dimensions are even (required by many encoders)
+        return Pair(newWidth and 0xFFFFFFFE.toInt(), newHeight and 0xFFFFFFFE.toInt())
+    }
+
+    /**
+     * Compresses a video file using the specified compression level
+     * @param inputFile The original video file
+     * @param outputFile The file where the compressed video will be saved
+     * @param compressionLevel The compression level to apply
+     * @param progressCallback Optional callback for progress updates
+     * @return true if compression was successful, false otherwise
+     */
+    @JvmStatic
+    fun compressVideoFile(
+        inputFile: File,
+        outputFile: File,
+        compressionLevel: VideoCompressionLevel,
+        progressCallback: VideoCompressionProgressCallback? = null
+    ): Boolean =
+        if (compressionLevel == VideoCompressionLevel.NONE) {
+            // No compression - just copy the file
+            progressCallback?.onCompressionStarted()
+            try {
+                inputFile.copyTo(outputFile, overwrite = true)
+                progressCallback?.onCompressionCompleted(
+                    inputFile.length(),
+                    outputFile.length(),
+                    0 // No compression ratio for copy operation
+                )
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to copy video file for no compression", e)
+                progressCallback?.onCompressionFailed("Failed to copy file: ${e.message}", e)
+                false
+            }
+        } else {
+            compressVideoFile(
+                inputFile,
+                outputFile,
+                compressionLevel.videoBitrate,
+                compressionLevel.audioBitrate,
+                compressionLevel.maxWidth,
+                compressionLevel.maxHeight,
+                compressionLevel.frameRate,
+                progressCallback
+            )
+        }
 }

@@ -193,5 +193,11 @@ public interface AppPreferences {
 
     void removeImageCompressionLevel();
 
+    String getVideoCompressionLevel();
+
+    void setVideoCompressionLevel(String level);
+
+    void removeVideoCompressionLevel();
+
     void clear();
 }
