@@ -108,13 +108,23 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             file = FileUtils.getFileFromUri(context, sourceFileUri)
 
             // Apply image compression if enabled and file is an image
+            val originalFile = file
             file = applyImageCompressionIfNeeded(file, sourceFileUri)
+
+            // If compression was applied, update the URI to point to compressed file
+            val finalUri = if (file != originalFile && file != null) {
+                Log.d(TAG, "Using compressed file for upload: ${file!!.name}")
+                Uri.fromFile(file!!)
+            } else {
+                Log.d(TAG, "Using original file for upload")
+                sourceFileUri
+            }
 
             val remotePath = getRemotePath(currentUser)
 
             initNotificationSetup()
             file?.let { isChunkedUploading = it.length() > CHUNK_UPLOAD_THRESHOLD_SIZE }
-            val uploadSuccess: Boolean = uploadFile(sourceFileUri, metaData, remotePath)
+            val uploadSuccess: Boolean = uploadFile(finalUri, metaData, remotePath)
 
             if (uploadSuccess) {
                 cancelNotification()
@@ -134,14 +144,14 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         }
     }
 
-    private fun uploadFile(sourceFileUri: Uri, metaData: String?, remotePath: String): Boolean =
+    private fun uploadFile(fileUri: Uri, metaData: String?, remotePath: String): Boolean =
         if (file == null) {
             false
         } else if (isChunkedUploading) {
             Log.d(TAG, "starting chunked upload because size is " + file!!.length())
 
             initNotificationWithPercentage()
-            val mimeType = context.contentResolver.getType(sourceFileUri)?.toMediaTypeOrNull()
+            val mimeType = context.contentResolver.getType(fileUri)?.toMediaTypeOrNull()
 
             chunkedFileUploader = ChunkedFileUploader(okHttpClient, currentUser, roomToken, metaData, this)
             chunkedFileUploader!!.upload(file!!, mimeType, remotePath)
@@ -149,7 +159,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             Log.d(TAG, "starting normal upload (not chunked) of $fileName")
 
             FileUploader(okHttpClient, context, currentUser, roomToken, ncApi, file!!)
-                .upload(sourceFileUri, fileName, remotePath, metaData)
+                .upload(fileUri, fileName, remotePath, metaData)
                 .blockingFirst()
         }
 
@@ -369,6 +379,13 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                         "Compressed: ${compressedSize / 1024}KB, " +
                         "Saved: $compressionRatio%"
                 )
+
+                // Debug: Show compression result in notification for testing
+                if (compressionRatio > 5) {
+                    Log.i(TAG, "✅ COMPRESSION SUCCESSFUL: $compressionRatio% reduction")
+                } else {
+                    Log.w(TAG, "⚠️ COMPRESSION MINIMAL: Only $compressionRatio% reduction - check settings")
+                }
 
                 // Update the fileName to reflect the compressed file
                 fileName = compressedFile.name

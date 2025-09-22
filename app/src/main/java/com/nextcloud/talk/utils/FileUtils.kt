@@ -260,14 +260,14 @@ object FileUtils {
             Log.d(TAG, "Starting image compression:")
             Log.d(TAG, "  Input file: ${inputFile.name} (${inputFile.length()} bytes)")
             Log.d(TAG, "  Target quality: $quality")
-            Log.d(TAG, "  Max dimensions: ${maxWidth}x${maxHeight}")
-            
+            Log.d(TAG, "  Max dimensions: ${maxWidth}x$maxHeight")
+
             // Decode the image to get its dimensions first
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
             BitmapFactory.decodeFile(inputFile.absolutePath, options)
-            
+
             Log.d(TAG, "  Original dimensions: ${options.outWidth}x${options.outHeight}")
             Log.d(TAG, "  Original MIME type: ${options.outMimeType}")
 
@@ -286,7 +286,7 @@ object FileUtils {
                 Log.e(TAG, "Failed to decode bitmap from file: ${inputFile.absolutePath}")
                 return false
             }
-            
+
             Log.d(TAG, "  Decoded bitmap: ${bitmap.width}x${bitmap.height}, config: ${bitmap.config}")
 
             // Calculate final dimensions maintaining aspect ratio
@@ -297,15 +297,32 @@ object FileUtils {
                 maxHeight
             )
 
-            Log.d(TAG, "  Target final dimensions: ${finalWidth}x${finalHeight}")
+            Log.d(TAG, "  Target final dimensions: ${finalWidth}x$finalHeight")
 
             // Scale the bitmap if necessary
             val scaledBitmap = if (bitmap.width != finalWidth || bitmap.height != finalHeight) {
-                Log.d(TAG, "  Scaling bitmap from ${bitmap.width}x${bitmap.height} to ${finalWidth}x${finalHeight}")
+                Log.d(TAG, "  Scaling bitmap from ${bitmap.width}x${bitmap.height} to ${finalWidth}x$finalHeight")
                 Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
             } else {
                 Log.d(TAG, "  No scaling needed, but will still apply quality compression")
                 bitmap
+            }
+
+            // EMERGENCY TEST: Force a tiny test image to verify compression works
+            Log.d(TAG, "EMERGENCY TEST: Creating tiny test image for compression verification")
+            try {
+                val testBitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.RGB_565)
+                testBitmap.eraseColor(android.graphics.Color.RED)
+
+                val testFile = File(outputFile.parent, "test_compression.jpg")
+                FileOutputStream(testFile).use { fos ->
+                    val testSuccess = testBitmap.compress(Bitmap.CompressFormat.JPEG, 50, fos)
+                    Log.d(TAG, "Test compression success: $testSuccess, file size: ${testFile.length()}")
+                }
+                testBitmap.recycle()
+                testFile.delete()
+            } catch (e: Exception) {
+                Log.e(TAG, "Test compression failed", e)
             }
 
             // Always determine compression format for quality reduction
@@ -336,20 +353,33 @@ object FileUtils {
                 }
             }
 
-            Log.d(TAG, "Compressing image: ${inputFile.name} (${inputFile.length()} bytes) with format: $format, quality: $quality")
+            Log.d(
+                TAG,
+                "Compressing image: ${inputFile.name} (${inputFile.length()} bytes) with format: $format, quality: $quality"
+            )
 
-            // Save the compressed image
+            // Save the compressed image - FORCE JPEG for maximum compression
             FileOutputStream(outputFile).use { fos ->
-                val compressionQuality = if (format == Bitmap.CompressFormat.PNG) 100 else quality
-                Log.d(TAG, "  Applying compression with quality: $compressionQuality")
-                val success = scaledBitmap.compress(format, compressionQuality, fos)
+                // ALWAYS use JPEG for maximum compression (except PNG with transparency)
+                val finalFormat = if (format == Bitmap.CompressFormat.PNG && hasTransparency(scaledBitmap)) {
+                    Log.d(TAG, "  Keeping PNG due to transparency")
+                    Bitmap.CompressFormat.PNG
+                } else {
+                    Log.d(TAG, "  FORCING JPEG compression for maximum size reduction")
+                    Bitmap.CompressFormat.JPEG
+                }
+
+                val compressionQuality = if (finalFormat == Bitmap.CompressFormat.PNG) 100 else quality
+                Log.d(TAG, "  Applying compression: format=$finalFormat, quality=$compressionQuality")
+
+                val success = scaledBitmap.compress(finalFormat, compressionQuality, fos)
                 fos.flush()
-                
+
                 if (!success) {
                     Log.e(TAG, "Failed to compress bitmap to output stream")
                     return false
                 }
-                
+
                 Log.d(TAG, "  Compression to stream successful")
             }
 
@@ -358,7 +388,7 @@ object FileUtils {
                 Log.e(TAG, "Output file was not created")
                 return false
             }
-            
+
             if (outputFile.length() == 0L) {
                 Log.e(TAG, "Output file is empty")
                 return false
@@ -366,26 +396,51 @@ object FileUtils {
 
             val originalSize = inputFile.length()
             val compressedSize = outputFile.length()
+
+            // Force verification: If file sizes are identical, something went wrong
+            if (originalSize == compressedSize && quality < 95) {
+                Log.w(TAG, "WARNING: Compressed file has identical size to original despite quality < 95%")
+                Log.w(TAG, "This suggests compression didn't work properly")
+
+                // Force a VERY aggressive re-compression attempt
+                Log.d(TAG, "Attempting VERY aggressive forced re-compression...")
+
+                try {
+                    FileOutputStream(outputFile).use { fos ->
+                        val forcedQuality = 15 // Very low quality
+                        val recompressSuccess = scaledBitmap.compress(Bitmap.CompressFormat.JPEG, forcedQuality, fos)
+                        fos.flush()
+
+                        if (recompressSuccess) {
+                            Log.d(TAG, "Forced re-compression completed with quality: $forcedQuality")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed forced re-compression", e)
+                }
+            }
+
+            val finalCompressedSize = outputFile.length()
             val compressionRatio = if (originalSize > 0) {
-                ((originalSize - compressedSize) * 100 / originalSize).toInt()
+                ((originalSize - finalCompressedSize) * 100 / originalSize).toInt()
             } else {
                 0
             }
             val compressedWidth = scaledBitmap.width
             val compressedHeight = scaledBitmap.height
-            
+
             // Clean up bitmaps
             if (scaledBitmap != bitmap) {
                 scaledBitmap.recycle()
             }
             bitmap.recycle()
-            
+
             Log.d(TAG, "Image compression completed successfully:")
-            Log.d(TAG, "  Original: ${originalSize / 1024}KB (${originalSize} bytes)")
-            Log.d(TAG, "  Compressed: ${compressedSize / 1024}KB (${compressedSize} bytes)")
+            Log.d(TAG, "  Original: ${originalSize / 1024}KB ($originalSize bytes)")
+            Log.d(TAG, "  Compressed: ${finalCompressedSize / 1024}KB ($finalCompressedSize bytes)")
             Log.d(TAG, "  Compression ratio: $compressionRatio%")
-            Log.d(TAG, "  Final dimensions: ${compressedWidth}x${compressedHeight}")
-            
+            Log.d(TAG, "  Final dimensions: ${compressedWidth}x$compressedHeight")
+
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to compress image", e)
@@ -421,18 +476,22 @@ object FileUtils {
         maxWidth: Int,
         maxHeight: Int
     ): Pair<Int, Int> {
-        if (originalWidth <= maxWidth && originalHeight <= maxHeight) {
+        // Always apply some reduction for compression, even if within limits
+        val targetMaxWidth = kotlin.math.min(maxWidth, (originalWidth * 0.9).toInt())
+        val targetMaxHeight = kotlin.math.min(maxHeight, (originalHeight * 0.9).toInt())
+
+        if (originalWidth <= targetMaxWidth && originalHeight <= targetMaxHeight) {
             return Pair(originalWidth, originalHeight)
         }
 
         val aspectRatio = originalWidth.toFloat() / originalHeight.toFloat()
 
         return if (originalWidth > originalHeight) {
-            val width = min(originalWidth, maxWidth)
+            val width = kotlin.math.min(originalWidth, targetMaxWidth)
             val height = (width / aspectRatio).toInt()
             Pair(width, height)
         } else {
-            val height = min(originalHeight, maxHeight)
+            val height = kotlin.math.min(originalHeight, targetMaxHeight)
             val width = (height * aspectRatio).toInt()
             Pair(width, height)
         }
