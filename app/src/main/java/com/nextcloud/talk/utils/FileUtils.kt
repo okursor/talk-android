@@ -552,50 +552,19 @@ object FileUtils {
         progressCallback: VideoCompressionProgressCallback? = null
     ): Boolean =
         try {
-            // TEMPORARY FIX: Use simple copy instead of MediaCodec compression
-            copyVideoFile(inputFile.absolutePath, outputFile.absolutePath, progressCallback)
+            compressVideoWithMediaCodec(
+                inputFile.absolutePath,
+                outputFile.absolutePath,
+                videoBitrate,
+                audioBitrate,
+                maxWidth,
+                maxHeight,
+                frameRate,
+                progressCallback
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Video compression failed", e)
             progressCallback?.onCompressionFailed("Video compression failed: ${e.message}", e)
-            false
-        }
-
-    /**
-     * Temporary helper method to copy video files with progress callback
-     */
-    private fun copyVideoFile(
-        inputPath: String,
-        outputPath: String,
-        progressCallback: VideoCompressionProgressCallback? = null
-    ): Boolean =
-        try {
-            val inputFile = File(inputPath)
-            val outputFile = File(outputPath)
-            val originalSizeBytes = inputFile.length()
-
-            Log.d(TAG, "Video 'compression' (copy): ${inputFile.name} -> ${outputFile.name}")
-
-            progressCallback?.onCompressionStarted()
-
-            // Simulate progress for user feedback during copy
-            progressCallback?.onProgressUpdate(25, 1, 4, originalSizeBytes, originalSizeBytes)
-
-            // Copy the file
-            inputFile.copyTo(outputFile, overwrite = true)
-
-            progressCallback?.onProgressUpdate(75, 3, 4, originalSizeBytes, outputFile.length())
-
-            val compressedSizeBytes = outputFile.length()
-            progressCallback?.onProgressUpdate(100, 4, 4, originalSizeBytes, compressedSizeBytes)
-
-            // For copy operation, compression ratio is 0%
-            progressCallback?.onCompressionCompleted(originalSizeBytes, compressedSizeBytes, 0)
-
-            Log.d(TAG, "Video 'compression' (copy) completed successfully: ${inputFile.name}")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Error during video copy operation", e)
-            progressCallback?.onCompressionFailed("Video copy failed: ${e.message}", e)
             false
         }
 
