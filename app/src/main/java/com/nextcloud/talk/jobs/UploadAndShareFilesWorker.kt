@@ -393,8 +393,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                     Log.w(TAG, "⚠️ COMPRESSION MINIMAL: Only $compressionRatio% reduction - check settings")
                 }
 
-                // Update the fileName to reflect the compressed file
-                fileName = compressedFile.name
+                // Don't change fileName - keep original name for upload
+                // The compressed file is now used, but uploaded with original name
 
                 compressedFile
             } else {
