@@ -32,6 +32,7 @@ import com.nextcloud.talk.activities.MainActivity
 import com.nextcloud.talk.api.NcApi
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.data.user.model.User
+import com.nextcloud.talk.models.ImageCompressionLevel
 import com.nextcloud.talk.upload.chunked.ChunkedFileUploader
 import com.nextcloud.talk.upload.chunked.OnDataTransferProgressListener
 import com.nextcloud.talk.upload.normal.FileUploader
@@ -105,6 +106,10 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             val sourceFileUri = sourceFile.toUri()
             fileName = FileUtils.getFileName(sourceFileUri, context)
             file = FileUtils.getFileFromUri(context, sourceFileUri)
+
+            // Apply image compression if enabled and file is an image
+            file = applyImageCompressionIfNeeded(file, sourceFileUri)
+
             val remotePath = getRemotePath(currentUser)
 
             initNotificationSetup()
@@ -301,6 +306,83 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     }
 
     private fun getResourceString(context: Context, resourceId: Int): String = context.resources.getString(resourceId)
+
+    /**
+     * Applies image compression if enabled in settings and the file is an image
+     * @param originalFile The original file to potentially compress
+     * @param sourceFileUri The source URI for MIME type checking
+     * @return The compressed file if compression was applied and successful, otherwise the original file
+     */
+    private fun applyImageCompressionIfNeeded(originalFile: File?, sourceFileUri: Uri): File? {
+        if (originalFile == null) return null
+
+        // Get the compression level from preferences
+        val compressionLevelKey = appPreferences.imageCompressionLevel
+        val compressionLevel = ImageCompressionLevel.fromKey(compressionLevelKey)
+
+        if (!compressionLevel.shouldCompress()) {
+            Log.d(TAG, "Image compression is disabled or set to NONE")
+            return originalFile
+        }
+
+        // Check if the file is an image (using both file and URI checks for reliability)
+        val isImageFromFile = FileUtils.isImageFile(originalFile)
+        val isImageFromUri = FileUtils.isImageFile(context, sourceFileUri)
+        val isImage = isImageFromFile || isImageFromUri
+
+        if (!isImage) {
+            Log.d(TAG, "File is not an image, skipping compression")
+            return originalFile
+        }
+
+        Log.d(
+            TAG,
+            "Starting image compression for file: ${originalFile.name} with level: ${compressionLevel.name}"
+        )
+
+        return try {
+            // Create a compressed file in cache directory
+            val compressedFileName = "compressed_${compressionLevel.key}_" +
+                "${System.currentTimeMillis()}_${originalFile.name}"
+            val compressedFile = File(context.cacheDir, compressedFileName)
+
+            // Apply compression using the specified level
+            val compressionSuccess = FileUtils.compressImageFile(
+                inputFile = originalFile,
+                outputFile = compressedFile,
+                compressionLevel = compressionLevel
+            )
+
+            if (compressionSuccess && compressedFile.exists() && compressedFile.length() > 0) {
+                val originalSize = originalFile.length()
+                val compressedSize = compressedFile.length()
+                val compressionRatio = if (originalSize > 0) {
+                    ((originalSize - compressedSize) * 100 / originalSize).toInt()
+                } else {
+                    0
+                }
+
+                Log.d(
+                    TAG,
+                    "Image compression successful with ${compressionLevel.name}. " +
+                        "Original: ${originalSize / 1024}KB, " +
+                        "Compressed: ${compressedSize / 1024}KB, " +
+                        "Saved: $compressionRatio%"
+                )
+
+                // Update the fileName to reflect the compressed file
+                fileName = compressedFile.name
+
+                compressedFile
+            } else {
+                Log.w(TAG, "Image compression failed or resulted in empty file, using original")
+                originalFile
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during image compression, using original file", e)
+            originalFile
+        }
+    }
 
     companion object {
         private val TAG = UploadAndShareFilesWorker::class.simpleName

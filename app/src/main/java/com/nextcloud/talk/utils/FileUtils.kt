@@ -12,9 +12,13 @@ package com.nextcloud.talk.utils
 import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import android.webkit.MimeTypeMap
+import com.nextcloud.talk.models.ImageCompressionLevel
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
@@ -22,6 +26,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.math.BigInteger
 import java.security.MessageDigest
+import kotlin.math.min
 
 object FileUtils {
     private val TAG = FileUtils::class.java.simpleName
@@ -163,4 +168,208 @@ object FileUtils {
         }
         return md5String.toString()
     }
+
+    /**
+     * Determines if the given file is an image based on its MIME type
+     */
+    @JvmStatic
+    fun isImageFile(file: File): Boolean {
+        val mimeType = getMimeType(file)
+        return mimeType?.startsWith("image/") == true
+    }
+
+    /**
+     * Determines if the given URI is an image based on its MIME type
+     */
+    @JvmStatic
+    fun isImageFile(context: Context, uri: Uri): Boolean {
+        val mimeType = context.contentResolver.getType(uri)
+        return mimeType?.startsWith("image/") == true
+    }
+
+    /**
+     * Gets the MIME type of a file
+     */
+    @JvmStatic
+    fun getMimeType(file: File): String? {
+        val extension = file.extension.lowercase()
+        return if (extension.isNotEmpty()) {
+            MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Compresses an image file with specified quality and maximum dimensions
+     * @param inputFile The original image file
+     * @param outputFile The file where the compressed image will be saved
+     * @param quality JPEG compression quality (0-100)
+     * @param maxWidth Maximum width in pixels
+     * @param maxHeight Maximum height in pixels
+     * @return true if compression was successful, false otherwise
+     */
+    @JvmStatic
+    fun compressImageFile(
+        inputFile: File,
+        outputFile: File,
+        quality: Int = 80,
+        maxWidth: Int = 1280,
+        maxHeight: Int = 1280
+    ): Boolean = compressImageFileInternal(inputFile, outputFile, quality, maxWidth, maxHeight)
+
+    /**
+     * Compresses an image file using the specified compression level
+     * @param inputFile The original image file
+     * @param outputFile The file where the compressed image will be saved
+     * @param compressionLevel The compression level to apply
+     * @return true if compression was successful, false otherwise
+     */
+    @JvmStatic
+    fun compressImageFile(inputFile: File, outputFile: File, compressionLevel: ImageCompressionLevel): Boolean =
+        if (compressionLevel == ImageCompressionLevel.NONE) {
+            // No compression - just copy the file
+            try {
+                inputFile.copyTo(outputFile, overwrite = true)
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to copy file for no compression", e)
+                false
+            }
+        } else {
+            compressImageFileInternal(
+                inputFile,
+                outputFile,
+                compressionLevel.quality,
+                compressionLevel.maxWidth,
+                compressionLevel.maxHeight
+            )
+        }
+
+    /**
+     * Internal implementation of image compression
+     */
+    private fun compressImageFileInternal(
+        inputFile: File,
+        outputFile: File,
+        quality: Int,
+        maxWidth: Int,
+        maxHeight: Int
+    ): Boolean {
+        return try {
+            // Decode the image to get its dimensions first
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeFile(inputFile.absolutePath, options)
+
+            // Calculate sample size to reduce memory usage
+            val sampleSize = calculateInSampleSize(options, maxWidth, maxHeight)
+
+            // Decode the actual bitmap with sample size
+            val decodingOptions = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inJustDecodeBounds = false
+            }
+
+            val bitmap = BitmapFactory.decodeFile(inputFile.absolutePath, decodingOptions)
+                ?: return false
+
+            // Calculate final dimensions maintaining aspect ratio
+            val (finalWidth, finalHeight) = calculateFinalDimensions(
+                bitmap.width,
+                bitmap.height,
+                maxWidth,
+                maxHeight
+            )
+
+            // Scale the bitmap if necessary
+            val scaledBitmap = if (bitmap.width != finalWidth || bitmap.height != finalHeight) {
+                Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
+            } else {
+                bitmap
+            }
+
+            // Determine compression format based on original file extension
+            val format = when (inputFile.extension.lowercase()) {
+                "png" -> if (hasTransparency(scaledBitmap)) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+                "webp" -> if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    Bitmap.CompressFormat.WEBP_LOSSY
+                } else {
+                    @Suppress("DEPRECATION")
+                    Bitmap.CompressFormat.WEBP
+                }
+                else -> Bitmap.CompressFormat.JPEG
+            }
+
+            // Save the compressed image
+            FileOutputStream(outputFile).use { fos ->
+                val compressionQuality = if (format == Bitmap.CompressFormat.PNG) 100 else quality
+                scaledBitmap.compress(format, compressionQuality, fos)
+                fos.flush()
+            }
+
+            // Clean up bitmaps
+            if (scaledBitmap != bitmap) {
+                scaledBitmap.recycle()
+            }
+            bitmap.recycle()
+
+            Log.d(TAG, "Image compressed successfully from ${inputFile.length()} to ${outputFile.length()} bytes")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to compress image", e)
+            false
+        }
+    }
+
+    /**
+     * Calculates the appropriate sample size for bitmap loading to reduce memory usage
+     */
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val height = options.outHeight
+        val width = options.outWidth
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight = height / 2
+            val halfWidth = width / 2
+
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
+
+    /**
+     * Calculates final dimensions while maintaining aspect ratio
+     */
+    private fun calculateFinalDimensions(
+        originalWidth: Int,
+        originalHeight: Int,
+        maxWidth: Int,
+        maxHeight: Int
+    ): Pair<Int, Int> {
+        if (originalWidth <= maxWidth && originalHeight <= maxHeight) {
+            return Pair(originalWidth, originalHeight)
+        }
+
+        val aspectRatio = originalWidth.toFloat() / originalHeight.toFloat()
+
+        return if (originalWidth > originalHeight) {
+            val width = min(originalWidth, maxWidth)
+            val height = (width / aspectRatio).toInt()
+            Pair(width, height)
+        } else {
+            val height = min(originalHeight, maxHeight)
+            val width = (height * aspectRatio).toInt()
+            Pair(width, height)
+        }
+    }
+
+    /**
+     * Checks if a bitmap has transparency
+     */
+    private fun hasTransparency(bitmap: Bitmap): Boolean = bitmap.hasAlpha() && bitmap.config == Bitmap.Config.ARGB_8888
 }
