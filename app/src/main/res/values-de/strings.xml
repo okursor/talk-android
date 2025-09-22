@@ -301,11 +301,11 @@
     <string name="nc_image_compression_none">Keine</string>
     <string name="nc_image_compression_none_description">Originalbilder ohne Kompression hochladen</string>
     <string name="nc_image_compression_light">Leicht</string>
-    <string name="nc_image_compression_light_description">Hohe Qualität mit minimaler Größenreduktion (max. 1920x1920, 85% Qualität)</string>
+    <string name="nc_image_compression_light_description">Hohe Qualität mit moderater Größenreduktion (max. 1920x1920, 95% Qualität)</string>
     <string name="nc_image_compression_medium">Mittel</string>
-    <string name="nc_image_compression_medium_description">Gute Balance zwischen Qualität und Größe (max. 1600x1600, 75% Qualität)</string>
+    <string name="nc_image_compression_medium_description">Gute Balance zwischen Qualität und Größe (max. 1600x1600, 90% Qualität)</string>
     <string name="nc_image_compression_strong">Stark</string>
-    <string name="nc_image_compression_strong_description">Maximale Größenreduktion für schnelles Teilen (max. 1280x1280, 60% Qualität)</string>
+    <string name="nc_image_compression_strong_description">Merkliche Größenreduktion für schnelles Teilen (max. 1280x1280, 80% Qualität)</string>
     
     <string name="nc_important_conversation">Wichtige Unterhaltung</string>
     <string name="nc_important_conversation_desc">\"Nicht stören\"-Benutzerstatus wird für wichtige Unterhaltungen ignoriert</string>

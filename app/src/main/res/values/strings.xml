@@ -53,11 +53,11 @@ How to translate with transifex:
     <string name="nc_image_compression_none">None</string>
     <string name="nc_image_compression_none_description">Upload original images without compression</string>
     <string name="nc_image_compression_light">Light</string>
-    <string name="nc_image_compression_light_description">High quality with minimal size reduction (max 1920x1920, 85% quality)</string>
+    <string name="nc_image_compression_light_description">High quality with moderate size reduction (max 1920x1920, 95% quality)</string>
     <string name="nc_image_compression_medium">Medium</string>
-    <string name="nc_image_compression_medium_description">Good balance between quality and size (max 1600x1600, 75% quality)</string>
+    <string name="nc_image_compression_medium_description">Good balance between quality and size (max 1600x1600, 90% quality)</string>
     <string name="nc_image_compression_strong">Strong</string>
-    <string name="nc_image_compression_strong_description">Maximum size reduction for quick sharing (max 1280x1280, 60% quality)</string>
+    <string name="nc_image_compression_strong_description">Noticeable size reduction for quick sharing (max 1280x1280, 80% quality)</string>
 
     <!-- Server selection -->
     <string name="nc_server_connect">Test server connection</string>

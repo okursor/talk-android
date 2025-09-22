@@ -20,19 +20,19 @@ enum class ImageCompressionLevel(val key: String, val quality: Int, val maxWidth
      * Light compression - better quality than WhatsApp
      * Suitable for high-quality sharing while reducing file size
      */
-    LIGHT("light", 85, 1920, 1920),
+    LIGHT("light", 95, 1920, 1920),
 
     /**
      * Medium compression - similar to WhatsApp compression
      * Good balance between quality and file size
      */
-    MEDIUM("medium", 75, 1600, 1600),
+    MEDIUM("medium", 90, 1600, 1600),
 
     /**
      * Strong compression - more aggressive than WhatsApp
      * Best for quick sharing and data-conscious scenarios
      */
-    STRONG("strong", 60, 1280, 1280);
+    STRONG("strong", 80, 1280, 1280);
 
     companion object {
         /**
