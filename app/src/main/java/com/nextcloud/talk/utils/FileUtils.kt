@@ -257,14 +257,23 @@ object FileUtils {
         maxHeight: Int
     ): Boolean {
         return try {
+            Log.d(TAG, "Starting image compression:")
+            Log.d(TAG, "  Input file: ${inputFile.name} (${inputFile.length()} bytes)")
+            Log.d(TAG, "  Target quality: $quality")
+            Log.d(TAG, "  Max dimensions: ${maxWidth}x${maxHeight}")
+            
             // Decode the image to get its dimensions first
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
             BitmapFactory.decodeFile(inputFile.absolutePath, options)
+            
+            Log.d(TAG, "  Original dimensions: ${options.outWidth}x${options.outHeight}")
+            Log.d(TAG, "  Original MIME type: ${options.outMimeType}")
 
             // Calculate sample size to reduce memory usage
             val sampleSize = calculateInSampleSize(options, maxWidth, maxHeight)
+            Log.d(TAG, "  Calculated sample size: $sampleSize")
 
             // Decode the actual bitmap with sample size
             val decodingOptions = BitmapFactory.Options().apply {
@@ -273,7 +282,12 @@ object FileUtils {
             }
 
             val bitmap = BitmapFactory.decodeFile(inputFile.absolutePath, decodingOptions)
-                ?: return false
+            if (bitmap == null) {
+                Log.e(TAG, "Failed to decode bitmap from file: ${inputFile.absolutePath}")
+                return false
+            }
+            
+            Log.d(TAG, "  Decoded bitmap: ${bitmap.width}x${bitmap.height}, config: ${bitmap.config}")
 
             // Calculate final dimensions maintaining aspect ratio
             val (finalWidth, finalHeight) = calculateFinalDimensions(
@@ -283,16 +297,29 @@ object FileUtils {
                 maxHeight
             )
 
+            Log.d(TAG, "  Target final dimensions: ${finalWidth}x${finalHeight}")
+
             // Scale the bitmap if necessary
             val scaledBitmap = if (bitmap.width != finalWidth || bitmap.height != finalHeight) {
+                Log.d(TAG, "  Scaling bitmap from ${bitmap.width}x${bitmap.height} to ${finalWidth}x${finalHeight}")
                 Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
             } else {
+                Log.d(TAG, "  No scaling needed")
                 bitmap
             }
 
             // Determine compression format based on original file extension
+            // For compression, we prefer JPEG format for better size reduction
             val format = when (inputFile.extension.lowercase()) {
-                "png" -> if (hasTransparency(scaledBitmap)) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+                "png" -> {
+                    // For PNG files, only keep PNG format if transparency is needed and quality is high
+                    if (hasTransparency(scaledBitmap) && quality >= 90) {
+                        Bitmap.CompressFormat.PNG
+                    } else {
+                        // Convert to JPEG for better compression
+                        Bitmap.CompressFormat.JPEG
+                    }
+                }
                 "webp" -> if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                     Bitmap.CompressFormat.WEBP_LOSSY
                 } else {
@@ -302,20 +329,42 @@ object FileUtils {
                 else -> Bitmap.CompressFormat.JPEG
             }
 
+            Log.d(TAG, "Compressing image: ${inputFile.name} (${inputFile.length()} bytes) with format: $format, quality: $quality")
+
             // Save the compressed image
             FileOutputStream(outputFile).use { fos ->
                 val compressionQuality = if (format == Bitmap.CompressFormat.PNG) 100 else quality
-                scaledBitmap.compress(format, compressionQuality, fos)
+                val success = scaledBitmap.compress(format, compressionQuality, fos)
                 fos.flush()
+                
+                if (!success) {
+                    Log.e(TAG, "Failed to compress bitmap to output stream")
+                    return false
+                }
             }
 
+            val originalSize = inputFile.length()
+            val compressedSize = outputFile.length()
+            val compressionRatio = if (originalSize > 0) {
+                ((originalSize - compressedSize) * 100 / originalSize).toInt()
+            } else {
+                0
+            }
+            val compressedWidth = scaledBitmap.width
+            val compressedHeight = scaledBitmap.height
+            
             // Clean up bitmaps
             if (scaledBitmap != bitmap) {
                 scaledBitmap.recycle()
             }
             bitmap.recycle()
-
-            Log.d(TAG, "Image compressed successfully from ${inputFile.length()} to ${outputFile.length()} bytes")
+            
+            Log.d(TAG, "Image compression completed successfully:")
+            Log.d(TAG, "  Original: ${originalSize / 1024}KB (${originalSize} bytes)")
+            Log.d(TAG, "  Compressed: ${compressedSize / 1024}KB (${compressedSize} bytes)")
+            Log.d(TAG, "  Compression ratio: $compressionRatio%")
+            Log.d(TAG, "  Final dimensions: ${compressedWidth}x${compressedHeight}")
+            
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to compress image", e)
