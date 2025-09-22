@@ -643,8 +643,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 // Note: For now, compression just copies the file (MediaCodec implementation pending)
                 Log.i(TAG, "📹 VIDEO PROCESSING: Using ${compressionLevel.getDescription()}")
 
-                // Update the fileName to reflect the processed file
-                fileName = compressedFile.name
+                // Don't change fileName - keep original name for upload
+                // The compressed file is now used, but uploaded with original name
 
                 compressedFile
             } else {
