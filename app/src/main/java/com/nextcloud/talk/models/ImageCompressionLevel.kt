@@ -20,19 +20,19 @@ enum class ImageCompressionLevel(val key: String, val quality: Int, val maxWidth
      * Light compression - good balance between quality and file size
      * Suitable for high-quality sharing while reducing file size
      */
-    LIGHT("light", 90, 1920, 1920),
+    LIGHT("light", 75, 1600, 1600),
 
     /**
      * Medium compression - noticeable file size reduction
      * Good for most casual sharing scenarios
      */
-    MEDIUM("medium", 80, 1280, 1280),
+    MEDIUM("medium", 60, 1280, 1280),
 
     /**
      * Strong compression - significant file size reduction
      * Best for quick sharing and data-conscious scenarios
      */
-    STRONG("strong", 65, 800, 800);
+    STRONG("strong", 45, 800, 800);
 
     companion object {
         /**

@@ -304,29 +304,36 @@ object FileUtils {
                 Log.d(TAG, "  Scaling bitmap from ${bitmap.width}x${bitmap.height} to ${finalWidth}x${finalHeight}")
                 Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
             } else {
-                Log.d(TAG, "  No scaling needed")
+                Log.d(TAG, "  No scaling needed, but will still apply quality compression")
                 bitmap
             }
 
-            // Determine compression format based on original file extension
+            // Always determine compression format for quality reduction
             // For compression, we prefer JPEG format for better size reduction
             val format = when (inputFile.extension.lowercase()) {
                 "png" -> {
                     // For PNG files, only keep PNG format if transparency is needed and quality is high
                     if (hasTransparency(scaledBitmap) && quality >= 90) {
+                        Log.d(TAG, "  Keeping PNG format due to transparency")
                         Bitmap.CompressFormat.PNG
                     } else {
                         // Convert to JPEG for better compression
+                        Log.d(TAG, "  Converting PNG to JPEG for better compression")
                         Bitmap.CompressFormat.JPEG
                     }
                 }
                 "webp" -> if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    Log.d(TAG, "  Using WEBP_LOSSY format")
                     Bitmap.CompressFormat.WEBP_LOSSY
                 } else {
                     @Suppress("DEPRECATION")
+                    Log.d(TAG, "  Using legacy WEBP format")
                     Bitmap.CompressFormat.WEBP
                 }
-                else -> Bitmap.CompressFormat.JPEG
+                else -> {
+                    Log.d(TAG, "  Using JPEG format")
+                    Bitmap.CompressFormat.JPEG
+                }
             }
 
             Log.d(TAG, "Compressing image: ${inputFile.name} (${inputFile.length()} bytes) with format: $format, quality: $quality")
@@ -334,6 +341,7 @@ object FileUtils {
             // Save the compressed image
             FileOutputStream(outputFile).use { fos ->
                 val compressionQuality = if (format == Bitmap.CompressFormat.PNG) 100 else quality
+                Log.d(TAG, "  Applying compression with quality: $compressionQuality")
                 val success = scaledBitmap.compress(format, compressionQuality, fos)
                 fos.flush()
                 
@@ -341,6 +349,19 @@ object FileUtils {
                     Log.e(TAG, "Failed to compress bitmap to output stream")
                     return false
                 }
+                
+                Log.d(TAG, "  Compression to stream successful")
+            }
+
+            // Verify the output file was created and has content
+            if (!outputFile.exists()) {
+                Log.e(TAG, "Output file was not created")
+                return false
+            }
+            
+            if (outputFile.length() == 0L) {
+                Log.e(TAG, "Output file is empty")
+                return false
             }
 
             val originalSize = inputFile.length()
