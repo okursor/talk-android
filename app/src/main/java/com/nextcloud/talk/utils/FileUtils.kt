@@ -39,7 +39,7 @@ object FileUtils {
     private val TAG = FileUtils::class.java.simpleName
     private const val RADIX: Int = 16
     private const val MD5_LENGTH: Int = 32
-    private const val TIMEOUT_USEC: Long = 10000
+    private const val TIMEOUT_USEC: Long = 100000 // 100ms - increased from 10ms
 
     /**
      * Creates a new [File]
@@ -552,18 +552,33 @@ object FileUtils {
         progressCallback: VideoCompressionProgressCallback? = null
     ): Boolean =
         try {
-            compressVideoWithMediaCodec(
-                inputFile.absolutePath,
-                outputFile.absolutePath,
-                videoBitrate,
-                audioBitrate,
-                maxWidth,
-                maxHeight,
-                frameRate,
-                progressCallback
-            )
+            Log.d(TAG, "compressVideoFile: Starting compression with parameters")
+            Log.d(TAG, "compressVideoFile: videoBitrate=$videoBitrate, audioBitrate=$audioBitrate")
+            Log.d(TAG, "compressVideoFile: maxWidth=$maxWidth, maxHeight=$maxHeight, frameRate=$frameRate")
+            
+            try {
+                Log.d(TAG, "compressVideoFile: About to call compressVideoWithMediaCodec")
+                compressVideoWithMediaCodec(
+                    inputFile.absolutePath,
+                    outputFile.absolutePath,
+                    videoBitrate,
+                    audioBitrate,
+                    maxWidth,
+                    maxHeight,
+                    frameRate,
+                    progressCallback
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "compressVideoFile: INNER EXCEPTION in compressVideoWithMediaCodec call", e)
+                Log.e(TAG, "compressVideoFile: INNER Exception type: ${e.javaClass.simpleName}")
+                Log.e(TAG, "compressVideoFile: INNER Exception message: ${e.message}")
+                throw e // Re-throw to be caught by outer catch
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Video compression failed", e)
+            Log.e(TAG, "compressVideoFile: Exception caught", e)
+            Log.e(TAG, "compressVideoFile: Exception type: ${e.javaClass.simpleName}")
+            Log.e(TAG, "compressVideoFile: Exception message: ${e.message}")
+            e.printStackTrace()
             progressCallback?.onCompressionFailed("Video compression failed: ${e.message}", e)
             false
         }
@@ -582,6 +597,11 @@ object FileUtils {
         frameRate: Int,
         progressCallback: VideoCompressionProgressCallback? = null
     ): Boolean {
+        Log.d(TAG, "compressVideoWithMediaCodec: Starting compression")
+        Log.d(TAG, "compressVideoWithMediaCodec: Input: $inputPath")
+        Log.d(TAG, "compressVideoWithMediaCodec: Output: $outputPath")
+        Log.d(TAG, "compressVideoWithMediaCodec: Target bitrate: ${targetVideoBitrate}kbps")
+        
         var extractor: MediaExtractor? = null
         var muxer: MediaMuxer? = null
         var videoDecoder: MediaCodec? = null
@@ -593,12 +613,15 @@ object FileUtils {
             // Get original file size for progress tracking
             val originalFile = File(inputPath)
             val originalSizeBytes = originalFile.length()
+            Log.d(TAG, "compressVideoWithMediaCodec: Original file size: $originalSizeBytes bytes")
 
             progressCallback?.onCompressionStarted()
 
             // Initialize MediaExtractor
+            Log.d(TAG, "compressVideoWithMediaCodec: Initializing MediaExtractor")
             extractor = MediaExtractor()
             extractor.setDataSource(inputPath)
+            Log.d(TAG, "compressVideoWithMediaCodec: MediaExtractor initialized, track count: ${extractor.trackCount}")
 
             // Find video and audio tracks
             var videoTrackIndex = -1
@@ -623,8 +646,16 @@ object FileUtils {
             }
 
             if (videoTrackIndex == -1) {
-                Log.e(TAG, "No video track found")
+                Log.e(TAG, "compressVideoWithMediaCodec: No video track found")
+                progressCallback?.onCompressionFailed("No video track found", null)
                 return false
+            }
+            
+            Log.d(TAG, "compressVideoWithMediaCodec: Found video track at index $videoTrackIndex")
+            if (audioTrackIndex != -1) {
+                Log.d(TAG, "compressVideoWithMediaCodec: Found audio track at index $audioTrackIndex")
+            } else {
+                Log.d(TAG, "compressVideoWithMediaCodec: No audio track found")
             }
 
             // Get original video dimensions
@@ -664,24 +695,32 @@ object FileUtils {
             outputVideoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             outputVideoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
 
-            // Create MediaMuxer
+            // Create MediaMuxer - DON'T add any tracks yet!
             muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
             // Setup video encoder
+            Log.d(TAG, "compressVideoWithMediaCodec: Creating video encoder")
             videoEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            Log.d(TAG, "compressVideoWithMediaCodec: Configuring video encoder")
             videoEncoder.configure(outputVideoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            Log.d(TAG, "compressVideoWithMediaCodec: Creating input surface")
             val surface = videoEncoder.createInputSurface()
+            Log.d(TAG, "compressVideoWithMediaCodec: Starting video encoder")
             videoEncoder.start()
 
             // Setup video decoder
+            Log.d(TAG, "compressVideoWithMediaCodec: Creating video decoder for ${videoFormat.getString(MediaFormat.KEY_MIME)}")
             videoDecoder = MediaCodec.createDecoderByType(videoFormat.getString(MediaFormat.KEY_MIME)!!)
+            Log.d(TAG, "compressVideoWithMediaCodec: Configuring video decoder")
             videoDecoder.configure(videoFormat, surface, null, 0)
+            Log.d(TAG, "compressVideoWithMediaCodec: Starting video decoder")
             videoDecoder.start()
+            Log.d(TAG, "compressVideoWithMediaCodec: Video decoder started successfully")
 
             extractor.selectTrack(videoTrackIndex)
 
-            // Process video
-            val videoTrackIndexOutput = muxer.addTrack(outputVideoFormat)
+            // Process video - Track will be added when encoder sends OUTPUT_FORMAT_CHANGED
+            var videoTrackIndexOutput = -1
             var muxerStarted = false
 
             val bufferInfo = MediaCodec.BufferInfo()
@@ -690,12 +729,43 @@ object FileUtils {
             var processedFrames = 0
             var lastProgressUpdate = System.currentTimeMillis()
             val progressUpdateInterval = 500 // Update every 500ms
+            
+            // Add timeout protection
+            val startTime = System.currentTimeMillis()
+            val maxProcessingTimeMs = 300_000L // 5 minutes maximum processing time
+            var consecutiveTimeouts = 0
+            val maxConsecutiveTimeouts = 200 // Allow up to 200 consecutive timeouts (20s at 100ms each)
 
             while (!outputDone) {
+                // Check for overall timeout
+                if (System.currentTimeMillis() - startTime > maxProcessingTimeMs) {
+                    Log.e(TAG, "Video compression timeout after ${maxProcessingTimeMs / 1000}s")
+                    throw RuntimeException("Video compression timeout")
+                }
+                
+                // CRITICAL: Process decoder output first (feeds encoder)
+                val decoderStatus = videoDecoder.dequeueOutputBuffer(bufferInfo, 100L)
+                if (decoderStatus >= 0) {
+                    Log.d(TAG, "compressVideoWithMediaCodec: Decoder output frame ready")
+                    
+                    // Render frame to encoder input surface
+                    videoDecoder.releaseOutputBuffer(decoderStatus, true) // true = render to surface
+                    processedFrames++
+                    
+                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                        Log.d(TAG, "compressVideoWithMediaCodec: Decoder EOS reached")
+                        videoEncoder.signalEndOfInputStream()
+                    }
+                } else if (decoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    // No decoder output yet
+                }
+                
                 // Feed input to decoder
                 if (!inputDone) {
-                    val inputBufferIndex = videoDecoder.dequeueInputBuffer(TIMEOUT_USEC)
+                    val inputBufferIndex = videoDecoder.dequeueInputBuffer(100L)
                     if (inputBufferIndex >= 0) {
+                        consecutiveTimeouts = 0 // Reset timeout counter on successful dequeue
+                        Log.d(TAG, "compressVideoWithMediaCodec: Got input buffer $inputBufferIndex, processing frame")
                         val inputBuffer = videoDecoder.getInputBuffer(inputBufferIndex)!!
                         val sampleSize = extractor.readSampleData(inputBuffer, 0)
                         if (sampleSize >= 0) {
@@ -716,39 +786,45 @@ object FileUtils {
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM
                             )
                             inputDone = true
+                            Log.d(TAG, "compressVideoWithMediaCodec: Input EOS sent to decoder")
                         }
                     }
                 }
 
-                // Get output from encoder
-                val outputBufferIndex = videoEncoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC)
-                when {
-                    outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                        // No output available yet
-                    }
-                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                // NOW check encoder output (AFTER decoder processes frames)
+                val encoderStatus = videoEncoder.dequeueOutputBuffer(bufferInfo, 100L)
+                when (encoderStatus) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        Log.d(TAG, "compressVideoWithMediaCodec: Encoder output format changed")
                         if (muxerStarted) {
                             throw RuntimeException("Format changed twice")
                         }
                         val newFormat = videoEncoder.outputFormat
-                        muxer.addTrack(newFormat)
+                        Log.d(TAG, "compressVideoWithMediaCodec: Adding track to muxer: $newFormat")
+                        videoTrackIndexOutput = muxer.addTrack(newFormat)
+                        Log.d(TAG, "compressVideoWithMediaCodec: Starting muxer")
                         muxer.start()
                         muxerStarted = true
+                        Log.d(TAG, "compressVideoWithMediaCodec: Muxer started successfully")
+                        consecutiveTimeouts = 0 // Reset on success
                     }
-                    outputBufferIndex >= 0 -> {
-                        val outputBuffer = videoEncoder.getOutputBuffer(outputBufferIndex)!!
+                    
+                    in 0..Int.MAX_VALUE -> {
+                        consecutiveTimeouts = 0 // Reset timeout counter on successful dequeue
+                        Log.d(TAG, "compressVideoWithMediaCodec: Got encoder output buffer $encoderStatus")
+                        val outputBuffer = videoEncoder.getOutputBuffer(encoderStatus)!!
+                        
                         if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                            Log.d(TAG, "compressVideoWithMediaCodec: Skipping codec config buffer")
                             bufferInfo.size = 0
                         }
+                        
                         if (bufferInfo.size != 0 && muxerStarted) {
                             outputBuffer.position(bufferInfo.offset)
                             outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
                             muxer.writeSampleData(videoTrackIndexOutput, outputBuffer, bufferInfo)
 
                             // Update progress tracking
-                            processedFrames++
-
-                            // Report progress periodically to avoid too frequent updates
                             val currentTime = System.currentTimeMillis()
                             if (currentTime - lastProgressUpdate >= progressUpdateInterval) {
                                 val progress = if (estimatedTotalFrames > 0) {
@@ -770,14 +846,31 @@ object FileUtils {
                                 )
 
                                 lastProgressUpdate = currentTime
-
                                 Log.d(TAG, "Progress: $progress% ($processedFrames/$estimatedTotalFrames frames)")
                             }
+                        } else if (!muxerStarted && bufferInfo.size != 0) {
+                            Log.w(TAG, "compressVideoWithMediaCodec: Encoder data available but muxer not started yet")
                         }
-                        videoEncoder.releaseOutputBuffer(outputBufferIndex, false)
-                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        
+                        videoEncoder.releaseOutputBuffer(encoderStatus, false)
+
+                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            Log.d(TAG, "compressVideoWithMediaCodec: Encoder EOS reached")
                             outputDone = true
                         }
+                    }
+                    
+                    MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        // No encoder output available
+                        consecutiveTimeouts++
+                        if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
+                            Log.e(TAG, "Too many consecutive encoder timeouts ($consecutiveTimeouts)")
+                            throw RuntimeException("Video compression stuck - encoder not producing output")
+                        }
+                    }
+                    
+                    else -> {
+                        Log.w(TAG, "compressVideoWithMediaCodec: Unexpected encoder status: $encoderStatus")
                     }
                 }
             }
@@ -801,7 +894,10 @@ object FileUtils {
 
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Error during video compression", e)
+            Log.e(TAG, "compressVideoWithMediaCodec: Error during video compression", e)
+            Log.e(TAG, "compressVideoWithMediaCodec: Exception type: ${e.javaClass.simpleName}")
+            Log.e(TAG, "compressVideoWithMediaCodec: Exception message: ${e.message}")
+            e.printStackTrace()
             progressCallback?.onCompressionFailed("Compression failed: ${e.message}", e)
             return false
         } finally {
@@ -886,6 +982,13 @@ object FileUtils {
                 false
             }
         } else {
+            Log.d(TAG, "compressVideoFile: Using compression level ${compressionLevel.name}")
+            Log.d(TAG, "compressVideoFile: compressionLevel.videoBitrate=${compressionLevel.videoBitrate}")
+            Log.d(TAG, "compressVideoFile: compressionLevel.audioBitrate=${compressionLevel.audioBitrate}")
+            Log.d(TAG, "compressVideoFile: compressionLevel.maxWidth=${compressionLevel.maxWidth}")
+            Log.d(TAG, "compressVideoFile: compressionLevel.maxHeight=${compressionLevel.maxHeight}")
+            Log.d(TAG, "compressVideoFile: compressionLevel.frameRate=${compressionLevel.frameRate}")
+            
             compressVideoFile(
                 inputFile,
                 outputFile,
