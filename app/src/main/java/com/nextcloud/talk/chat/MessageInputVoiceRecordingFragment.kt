@@ -114,6 +114,7 @@ class MessageInputVoiceRecordingFragment : Fragment() {
 
         binding.sendVoiceRecording.setOnClickListener {
             chatActivity.chatViewModel.stopAndSendAudioRecording(
+                context = chatActivity,
                 roomToken = chatActivity.roomToken,
                 replyToMessageId = chatActivity.getReplyToMessageId(),
                 displayName = chatActivity.currentConversation!!.displayName

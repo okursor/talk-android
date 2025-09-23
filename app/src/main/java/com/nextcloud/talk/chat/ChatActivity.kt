@@ -4523,6 +4523,7 @@ class ChatActivity :
         displayName: String
     ) {
         chatViewModel.uploadFile(
+            this,
             fileUri,
             isVoiceMessage,
             caption,

@@ -20,6 +20,7 @@ import com.nextcloud.talk.databinding.DialogFileAttachmentPreviewBinding
 import com.nextcloud.talk.ui.theme.ViewThemeUtils
 import com.nextcloud.talk.utils.permissions.PlatformPermissionUtil
 import javax.inject.Inject
+import android.util.Log
 
 @AutoInjector(NextcloudTalkApplication::class)
 class FileAttachmentPreviewFragment : DialogFragment() {
@@ -70,7 +71,13 @@ class FileAttachmentPreviewFragment : DialogFragment() {
 
         binding.buttonSend.setOnClickListener {
             val caption: String = binding.dialogFileAttachmentPreviewCaption.text.toString()
+            Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Send button clicked")
+            Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Caption: '$caption'")
+            Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Files to upload: $filesList")
+            Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Number of files: ${filesList.size}")
+            
             uploadFiles(filesList, caption)
+            Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Called uploadFiles callback")
             dismiss()
         }
     }
