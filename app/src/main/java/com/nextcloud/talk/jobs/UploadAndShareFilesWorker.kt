@@ -116,19 +116,19 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             val sourceFileUri = sourceFile.toUri()
             Log.d(TAG, "📁 WORKER DOWORK: Source URI: $sourceFileUri")
             Log.d(TAG, "📁 WORKER DOWORK: URI scheme: ${sourceFileUri.scheme}")
-            
+
             fileName = FileUtils.getFileName(sourceFileUri, context)
             Log.d(TAG, "📝 WORKER DOWORK: File name: $fileName")
-            
+
             file = FileUtils.getFileFromUri(context, sourceFileUri)
             Log.d(TAG, "📂 WORKER DOWORK: File object: $file")
-            
+
             if (file == null) {
                 Log.e(TAG, "❌ WORKER DOWORK: File is null after getFileFromUri!")
                 showFailedToUploadNotification()
                 return Result.failure()
             }
-            
+
             Log.d(TAG, "📊 WORKER DOWORK: File exists: ${file!!.exists()}, size: ${file!!.length()} bytes")
 
             // Apply image compression if enabled and file is an image
@@ -139,10 +139,16 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
             // Apply video compression if enabled and file is a video
             Log.d(TAG, "🎥 WORKER DOWORK: Starting video compression check...")
-            Log.d(TAG, "🎥 WORKER DOWORK: File before video compression: ${file?.absolutePath}, size: ${file?.length()} bytes")
+            Log.d(
+                TAG,
+                "🎥 WORKER DOWORK: File before video compression: ${file?.absolutePath}, size: ${file?.length()} bytes"
+            )
             file = applyVideoCompressionIfNeeded(file ?: originalFile, sourceFileUri)
             Log.d(TAG, "🎥 WORKER DOWORK: Video compression completed")
-            Log.d(TAG, "🎥 WORKER DOWORK: File after video compression: ${file?.absolutePath}, size: ${file?.length()} bytes")
+            Log.d(
+                TAG,
+                "🎥 WORKER DOWORK: File after video compression: ${file?.absolutePath}, size: ${file?.length()} bytes"
+            )
 
             // If compression was applied, update the URI to point to compressed file
             val finalUri = if (file != originalFile && file != null) {
@@ -468,11 +474,11 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         Log.d(TAG, "VIDEO_COMPRESSION: Calling FileUtils.isVideoFile(originalFile)...")
         val isVideoFromFile = FileUtils.isVideoFile(originalFile)
         Log.d(TAG, "VIDEO_COMPRESSION: isVideoFromFile result: $isVideoFromFile")
-        
+
         Log.d(TAG, "VIDEO_COMPRESSION: Calling FileUtils.isVideoFile(context, sourceFileUri)...")
         val isVideoFromUri = FileUtils.isVideoFile(context, sourceFileUri)
         Log.d(TAG, "VIDEO_COMPRESSION: isVideoFromUri result: $isVideoFromUri")
-        
+
         val isVideo = isVideoFromFile || isVideoFromUri
         Log.d(TAG, "VIDEO_COMPRESSION: Final isVideo result: $isVideo")
 
@@ -669,14 +675,14 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             Log.d(TAG, "VIDEO_COMPRESSION: Input file: ${originalFile.absolutePath}, size: ${originalFile.length()}")
             Log.d(TAG, "VIDEO_COMPRESSION: Output file: ${compressedFile.absolutePath}")
             Log.d(TAG, "VIDEO_COMPRESSION: Compression level: ${compressionLevel.name}")
-            
+
             val compressionSuccess = FileUtils.compressVideoFile(
                 inputFile = originalFile,
                 outputFile = compressedFile,
                 compressionLevel = compressionLevel,
                 progressCallback = progressCallback
             )
-            
+
             Log.d(TAG, "VIDEO_COMPRESSION: FileUtils.compressVideoFile() returned: $compressionSuccess")
 
             if (compressionSuccess && compressedFile.exists() && compressedFile.length() > 0) {
@@ -766,7 +772,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             Log.d(TAG, "🚀 WORKER SETUP: roomToken: $roomToken")
             Log.d(TAG, "🚀 WORKER SETUP: conversationName: $conversationName")
             Log.d(TAG, "🚀 WORKER SETUP: metaData: $metaData")
-            
+
             val data: Data = Data.Builder()
                 .putString(DEVICE_SOURCE_FILE, fileUri)
                 .putString(ROOM_TOKEN, roomToken)
@@ -776,7 +782,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             val uploadWorker: OneTimeWorkRequest = OneTimeWorkRequest.Builder(UploadAndShareFilesWorker::class.java)
                 .setInputData(data)
                 .build()
-            
+
             Log.d(TAG, "🚀 WORKER SETUP: Enqueueing work with ID: ${uploadWorker.id}")
             try {
                 WorkManager.getInstance().enqueueUniqueWork(fileUri, ExistingWorkPolicy.KEEP, uploadWorker)
@@ -793,7 +799,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             Log.d(TAG, "🚀 WORKER SETUP: roomToken: $roomToken")
             Log.d(TAG, "🚀 WORKER SETUP: conversationName: $conversationName")
             Log.d(TAG, "🚀 WORKER SETUP: metaData: $metaData")
-            
+
             val data: Data = Data.Builder()
                 .putString(DEVICE_SOURCE_FILE, fileUri)
                 .putString(ROOM_TOKEN, roomToken)
@@ -803,7 +809,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             val uploadWorker: OneTimeWorkRequest = OneTimeWorkRequest.Builder(UploadAndShareFilesWorker::class.java)
                 .setInputData(data)
                 .build()
-            
+
             Log.d(TAG, "🚀 WORKER SETUP: Enqueueing work with ID: ${uploadWorker.id}")
             try {
                 WorkManager.getInstance(context).enqueueUniqueWork(fileUri, ExistingWorkPolicy.KEEP, uploadWorker)

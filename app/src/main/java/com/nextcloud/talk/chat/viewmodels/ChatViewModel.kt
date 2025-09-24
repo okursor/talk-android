@@ -698,7 +698,12 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun stopAndSendAudioRecording(context: Context, roomToken: String = "", replyToMessageId: Int? = null, displayName: String) {
+    fun stopAndSendAudioRecording(
+        context: Context,
+        roomToken: String = "",
+        replyToMessageId: Int? = null,
+        displayName: String
+    ) {
         stopAudioRecording()
 
         if (mediaRecorderManager.mediaRecorderState != MediaRecorderManager.MediaRecorderState.ERROR) {
@@ -764,7 +769,7 @@ class ChatViewModel @Inject constructor(
             Log.d("ChatViewModel", "🚀 UPLOAD START: roomToken: $room")
             Log.d("ChatViewModel", "🚀 UPLOAD START: displayName: $displayName")
             Log.d("ChatViewModel", "🚀 UPLOAD START: metaData: $metaData")
-            
+
             UploadAndShareFilesWorker.upload(
                 context,
                 fileUri,

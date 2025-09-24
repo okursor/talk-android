@@ -23,6 +23,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.view.Surface
 import com.nextcloud.talk.models.ImageCompressionLevel
 import com.nextcloud.talk.models.VideoCompressionLevel
 import com.nextcloud.talk.interfaces.VideoCompressionProgressCallback
@@ -555,7 +556,7 @@ object FileUtils {
             Log.d(TAG, "compressVideoFile: Starting compression with parameters")
             Log.d(TAG, "compressVideoFile: videoBitrate=$videoBitrate, audioBitrate=$audioBitrate")
             Log.d(TAG, "compressVideoFile: maxWidth=$maxWidth, maxHeight=$maxHeight, frameRate=$frameRate")
-            
+
             try {
                 Log.d(TAG, "compressVideoFile: About to call compressVideoWithMediaCodec")
                 compressVideoWithMediaCodec(
@@ -601,13 +602,15 @@ object FileUtils {
         Log.d(TAG, "compressVideoWithMediaCodec: Input: $inputPath")
         Log.d(TAG, "compressVideoWithMediaCodec: Output: $outputPath")
         Log.d(TAG, "compressVideoWithMediaCodec: Target bitrate: ${targetVideoBitrate}kbps")
-        
+
         var extractor: MediaExtractor? = null
         var muxer: MediaMuxer? = null
         var videoDecoder: MediaCodec? = null
         var videoEncoder: MediaCodec? = null
         var audioDecoder: MediaCodec? = null
         var audioEncoder: MediaCodec? = null
+        var codecInputSurface: CodecInputSurface? = null
+        var surfaceRenderer: SurfaceTextureRenderer? = null
 
         try {
             // Get original file size for progress tracking
@@ -650,7 +653,7 @@ object FileUtils {
                 progressCallback?.onCompressionFailed("No video track found", null)
                 return false
             }
-            
+
             Log.d(TAG, "compressVideoWithMediaCodec: Found video track at index $videoTrackIndex")
             if (audioTrackIndex != -1) {
                 Log.d(TAG, "compressVideoWithMediaCodec: Found audio track at index $audioTrackIndex")
@@ -704,15 +707,31 @@ object FileUtils {
             Log.d(TAG, "compressVideoWithMediaCodec: Configuring video encoder")
             videoEncoder.configure(outputVideoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             Log.d(TAG, "compressVideoWithMediaCodec: Creating input surface")
-            val surface = videoEncoder.createInputSurface()
+            val encoderInputSurface = videoEncoder.createInputSurface()
             Log.d(TAG, "compressVideoWithMediaCodec: Starting video encoder")
             videoEncoder.start()
 
-            // Setup video decoder
-            Log.d(TAG, "compressVideoWithMediaCodec: Creating video decoder for ${videoFormat.getString(MediaFormat.KEY_MIME)}")
+            // Create CodecInputSurface wrapper for encoder surface with OpenGL context
+            val codecInputSurface = CodecInputSurface(encoderInputSurface)
+            codecInputSurface.makeCurrent()
+
+            // Setup SurfaceTextureRenderer for transformation
+            val surfaceRenderer = SurfaceTextureRenderer()
+            val decoderOutputTexture = surfaceRenderer.setup()
+
+            // Configure viewport for scaling transformation
+            surfaceRenderer.setViewport(newWidth, newHeight, originalWidth, originalHeight)
+
+            Log.d(TAG, "compressVideoWithMediaCodec: OpenGL transformation setup complete")
+
+            // Setup video decoder with SurfaceTexture as output
+            Log.d(
+                TAG,
+                "compressVideoWithMediaCodec: Creating video decoder for ${videoFormat.getString(MediaFormat.KEY_MIME)}"
+            )
             videoDecoder = MediaCodec.createDecoderByType(videoFormat.getString(MediaFormat.KEY_MIME)!!)
-            Log.d(TAG, "compressVideoWithMediaCodec: Configuring video decoder")
-            videoDecoder.configure(videoFormat, surface, null, 0)
+            Log.d(TAG, "compressVideoWithMediaCodec: Configuring video decoder with SurfaceTexture")
+            videoDecoder.configure(videoFormat, Surface(decoderOutputTexture), null, 0)
             Log.d(TAG, "compressVideoWithMediaCodec: Starting video decoder")
             videoDecoder.start()
             Log.d(TAG, "compressVideoWithMediaCodec: Video decoder started successfully")
@@ -729,7 +748,7 @@ object FileUtils {
             var processedFrames = 0
             var lastProgressUpdate = System.currentTimeMillis()
             val progressUpdateInterval = 500 // Update every 500ms
-            
+
             // Add timeout protection
             val startTime = System.currentTimeMillis()
             val maxProcessingTimeMs = 300_000L // 5 minutes maximum processing time
@@ -742,16 +761,29 @@ object FileUtils {
                     Log.e(TAG, "Video compression timeout after ${maxProcessingTimeMs / 1000}s")
                     throw RuntimeException("Video compression timeout")
                 }
-                
-                // CRITICAL: Process decoder output first (feeds encoder)
+
+                // CRITICAL: Process decoder output first (feeds encoder via OpenGL)
                 val decoderStatus = videoDecoder.dequeueOutputBuffer(bufferInfo, 100L)
                 if (decoderStatus >= 0) {
                     Log.d(TAG, "compressVideoWithMediaCodec: Decoder output frame ready")
-                    
-                    // Render frame to encoder input surface
-                    videoDecoder.releaseOutputBuffer(decoderStatus, true) // true = render to surface
+
+                    // Instead of rendering to surface directly, we render to SurfaceTexture
+                    // which will be processed by OpenGL and then sent to encoder
+                    videoDecoder.releaseOutputBuffer(decoderStatus, true) // true = render to SurfaceTexture
+
+                    // Process the frame through OpenGL transformation
+                    codecInputSurface.makeCurrent()
+                    surfaceRenderer.drawFrame()
+
+                    // Set presentation time for encoder
+                    val presentationTimeUs = surfaceRenderer.getTimestamp() / 1000 // Convert ns to us
+                    codecInputSurface.setPresentationTime(presentationTimeUs * 1000) // Convert back to ns
+
+                    // Swap buffers to send frame to encoder
+                    codecInputSurface.swapBuffers()
+
                     processedFrames++
-                    
+
                     if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                         Log.d(TAG, "compressVideoWithMediaCodec: Decoder EOS reached")
                         videoEncoder.signalEndOfInputStream()
@@ -759,7 +791,7 @@ object FileUtils {
                 } else if (decoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
                     // No decoder output yet
                 }
-                
+
                 // Feed input to decoder
                 if (!inputDone) {
                     val inputBufferIndex = videoDecoder.dequeueInputBuffer(100L)
@@ -808,17 +840,17 @@ object FileUtils {
                         Log.d(TAG, "compressVideoWithMediaCodec: Muxer started successfully")
                         consecutiveTimeouts = 0 // Reset on success
                     }
-                    
+
                     in 0..Int.MAX_VALUE -> {
                         consecutiveTimeouts = 0 // Reset timeout counter on successful dequeue
                         Log.d(TAG, "compressVideoWithMediaCodec: Got encoder output buffer $encoderStatus")
                         val outputBuffer = videoEncoder.getOutputBuffer(encoderStatus)!!
-                        
+
                         if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                             Log.d(TAG, "compressVideoWithMediaCodec: Skipping codec config buffer")
                             bufferInfo.size = 0
                         }
-                        
+
                         if (bufferInfo.size != 0 && muxerStarted) {
                             outputBuffer.position(bufferInfo.offset)
                             outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
@@ -851,7 +883,7 @@ object FileUtils {
                         } else if (!muxerStarted && bufferInfo.size != 0) {
                             Log.w(TAG, "compressVideoWithMediaCodec: Encoder data available but muxer not started yet")
                         }
-                        
+
                         videoEncoder.releaseOutputBuffer(encoderStatus, false)
 
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
@@ -859,7 +891,7 @@ object FileUtils {
                             outputDone = true
                         }
                     }
-                    
+
                     MediaCodec.INFO_TRY_AGAIN_LATER -> {
                         // No encoder output available
                         consecutiveTimeouts++
@@ -868,7 +900,7 @@ object FileUtils {
                             throw RuntimeException("Video compression stuck - encoder not producing output")
                         }
                     }
-                    
+
                     else -> {
                         Log.w(TAG, "compressVideoWithMediaCodec: Unexpected encoder status: $encoderStatus")
                     }
@@ -914,6 +946,10 @@ object FileUtils {
                 audioDecoder?.release()
                 audioEncoder?.stop()
                 audioEncoder?.release()
+
+                // Clean up OpenGL resources
+                surfaceRenderer?.release()
+                codecInputSurface?.release()
             } catch (e: Exception) {
                 Log.e(TAG, "Error cleaning up resources", e)
             }
@@ -988,7 +1024,7 @@ object FileUtils {
             Log.d(TAG, "compressVideoFile: compressionLevel.maxWidth=${compressionLevel.maxWidth}")
             Log.d(TAG, "compressVideoFile: compressionLevel.maxHeight=${compressionLevel.maxHeight}")
             Log.d(TAG, "compressVideoFile: compressionLevel.frameRate=${compressionLevel.frameRate}")
-            
+
             compressVideoFile(
                 inputFile,
                 outputFile,

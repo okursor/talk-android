@@ -75,7 +75,7 @@ class FileAttachmentPreviewFragment : DialogFragment() {
             Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Caption: '$caption'")
             Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Files to upload: $filesList")
             Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Number of files: ${filesList.size}")
-            
+
             uploadFiles(filesList, caption)
             Log.d("FileAttachmentPreview", "📋 SEND BUTTON: Called uploadFiles callback")
             dismiss()
