@@ -75,6 +75,9 @@ class SurfaceTextureRenderer {
     private val mvpMatrix = FloatArray(16)
     private val projectionMatrix = FloatArray(16)
     private val viewMatrix = FloatArray(16)
+    private val rotationMatrix = FloatArray(16)
+    private val textureTransformMatrix = FloatArray(16)
+    private var videoRotation = 0
 
     init {
         // Initialize vertex buffer
@@ -173,6 +176,53 @@ class SurfaceTextureRenderer {
         Matrix.multiplyMM(mvpMatrix, 0, projectionMatrix, 0, viewMatrix, 0)
 
         Log.d(TAG, "Viewport configured with aspect ratio correction")
+    }
+
+    /**
+     * Set video rotation transformation
+     * @param rotation Rotation in degrees (0, 90, 180, 270)
+     */
+    fun setRotation(rotation: Int) {
+        videoRotation = rotation
+        Log.d(TAG, "Setting video rotation to $rotation degrees")
+        
+        // Create rotation matrix
+        Matrix.setIdentityM(rotationMatrix, 0)
+        when (rotation) {
+            90 -> {
+                Matrix.rotateM(rotationMatrix, 0, -90f, 0f, 0f, 1f)
+                Log.d(TAG, "Applied -90° rotation matrix (portrait to landscape correction)")
+            }
+            180 -> {
+                Matrix.rotateM(rotationMatrix, 0, -180f, 0f, 0f, 1f)
+                Log.d(TAG, "Applied -180° rotation matrix")
+            }
+            270 -> {
+                Matrix.rotateM(rotationMatrix, 0, -270f, 0f, 0f, 1f)
+                Log.d(TAG, "Applied -270° rotation matrix (portrait to landscape correction)")
+            }
+            else -> {
+                Log.d(TAG, "No rotation applied (0°)")
+            }
+        }
+        
+        // Update MVP matrix with rotation
+        updateMvpMatrix()
+    }
+    
+    /**
+     * Update MVP matrix combining projection, view, and rotation
+     */
+    private fun updateMvpMatrix() {
+        val tempMatrix = FloatArray(16)
+        
+        // Combine view and rotation matrices
+        Matrix.multiplyMM(tempMatrix, 0, viewMatrix, 0, rotationMatrix, 0)
+        
+        // Combine with projection
+        Matrix.multiplyMM(mvpMatrix, 0, projectionMatrix, 0, tempMatrix, 0)
+        
+        Log.d(TAG, "MVP matrix updated with rotation: $videoRotation°")
     }
 
     /**

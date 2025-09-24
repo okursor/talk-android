@@ -22,6 +22,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.view.Surface
 import com.nextcloud.talk.models.ImageCompressionLevel
@@ -684,10 +685,44 @@ object FileUtils {
                 1000 // Fallback estimate
             }
 
-            // Calculate new dimensions maintaining aspect ratio
-            val (newWidth, newHeight) = calculateNewDimensions(originalWidth, originalHeight, maxWidth, maxHeight)
+            // Detect video rotation from metadata
+            val videoRotation = try {
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(inputPath)
+                val rotationString = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                val rotation = rotationString?.toIntOrNull() ?: 0
+                retriever.release()
+                Log.d(TAG, "compressVideoWithMediaCodec: Detected video rotation: $rotation degrees")
+                rotation
+            } catch (e: Exception) {
+                Log.w(TAG, "compressVideoWithMediaCodec: Failed to extract rotation, assuming 0°", e)
+                0
+            }
 
-            Log.d(TAG, "Original: ${originalWidth}x$originalHeight, Target: ${newWidth}x$newHeight")
+            // Also check MediaFormat for rotation as fallback
+            val formatRotation = if (videoFormat!!.containsKey(MediaFormat.KEY_ROTATION)) {
+                videoFormat.getInteger(MediaFormat.KEY_ROTATION)
+            } else {
+                0
+            }
+
+            // Use the detected rotation (prefer MediaMetadataRetriever)
+            val finalRotation = if (videoRotation != 0) videoRotation else formatRotation
+            Log.d(TAG, "compressVideoWithMediaCodec: Using final rotation: $finalRotation degrees")
+
+            // Adjust source dimensions based on rotation (swap width/height for 90°/270°)
+            val (sourceWidth, sourceHeight) = if (finalRotation == 90 || finalRotation == 270) {
+                Log.d(TAG, "compressVideoWithMediaCodec: Swapping dimensions due to rotation")
+                Pair(originalHeight, originalWidth) // Swap for rotated video
+            } else {
+                Pair(originalWidth, originalHeight)
+            }
+
+            // Calculate new dimensions maintaining aspect ratio with corrected source dimensions
+            val (newWidth, newHeight) = calculateNewDimensions(sourceWidth, sourceHeight, maxWidth, maxHeight)
+
+            Log.d(TAG, "Original: ${originalWidth}x$originalHeight, Adjusted source: ${sourceWidth}x$sourceHeight")
+            Log.d(TAG, "Target: ${newWidth}x$newHeight, Rotation: $finalRotation°")
             Log.d(TAG, "Estimated frames: $estimatedTotalFrames, Duration: ${videoDurationUs / 1_000_000}s")
 
             // Create output format for video
@@ -771,10 +806,13 @@ object FileUtils {
             val surfaceRenderer = SurfaceTextureRenderer()
             val decoderOutputTexture = surfaceRenderer.setup()
 
-            // Configure viewport for scaling transformation
-            surfaceRenderer.setViewport(newWidth, newHeight, originalWidth, originalHeight)
+            // Configure viewport for scaling transformation with corrected dimensions
+            surfaceRenderer.setViewport(newWidth, newHeight, sourceWidth, sourceHeight)
+            
+            // Configure rotation transformation
+            surfaceRenderer.setRotation(finalRotation)
 
-            Log.d(TAG, "compressVideoWithMediaCodec: OpenGL transformation setup complete")
+            Log.d(TAG, "compressVideoWithMediaCodec: OpenGL transformation setup complete with rotation: $finalRotation°")
 
             // Setup video decoder with SurfaceTexture as output
             Log.d(
