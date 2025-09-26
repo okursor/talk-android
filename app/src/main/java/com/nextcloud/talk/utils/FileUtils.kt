@@ -626,8 +626,15 @@ object FileUtils {
             // Initialize MediaExtractor
             Log.d(TAG, "compressVideoWithMediaCodec: Initializing MediaExtractor")
             extractor = MediaExtractor()
-            extractor.setDataSource(inputPath)
-            Log.d(TAG, "compressVideoWithMediaCodec: MediaExtractor initialized, track count: ${extractor.trackCount}")
+            
+            try {
+                extractor.setDataSource(inputPath)
+                Log.d(TAG, "compressVideoWithMediaCodec: MediaExtractor initialized, track count: ${extractor.trackCount}")
+            } catch (e: Exception) {
+                Log.e(TAG, "compressVideoWithMediaCodec: Failed to set data source", e)
+                progressCallback?.onCompressionFailed("Failed to initialize video decoder", e)
+                return false
+            }
 
             // Find video and audio tracks
             var videoTrackIndex = -1
@@ -1268,7 +1275,7 @@ object FileUtils {
             }
         } else {
             Log.d(TAG, "compressVideoFile: Using compression level ${compressionLevel.name}")
-            Log.d(TAG, "compressVideoFile: compressionLevel.videoBitrate=${compressionLevel.videoBitrate}")
+             Log.d(TAG, "compressVideoFile: compressionLevel.videoBitrate=${compressionLevel.videoBitrate}")
             Log.d(TAG, "compressVideoFile: compressionLevel.audioBitrate=${compressionLevel.audioBitrate}")
             Log.d(TAG, "compressVideoFile: compressionLevel.maxWidth=${compressionLevel.maxWidth}")
             Log.d(TAG, "compressVideoFile: compressionLevel.maxHeight=${compressionLevel.maxHeight}")
