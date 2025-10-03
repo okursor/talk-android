@@ -67,7 +67,17 @@ public class IncomingPreviewMessageViewHolder extends PreviewMessageViewHolder {
 
             float textSize = 0;
             if (context != null) {
-                textSize = context.getResources().getDimension(R.dimen.chat_text_size);
+                // base text size in pixels from resources (dimens defined in sp)
+                float baseTextPx = context.getResources().getDimension(R.dimen.chat_text_size);
+                // try to read app font scale from AppPreferencesImpl, fallback to system font scale
+                float fontScale = 1.0f;
+                try {
+                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl prefs = new com.nextcloud.talk.utils.preferences.AppPreferencesImpl(context);
+                    fontScale = prefs.getFontScale();
+                } catch (Throwable t) {
+                    fontScale = context.getResources().getConfiguration().fontScale;
+                }
+                textSize = baseTextPx * fontScale;
             }
             HashMap<String, HashMap<String, String>> messageParameters = message.getMessageParameters();
             if (
