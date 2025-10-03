@@ -210,8 +210,10 @@
             android:padding="12dp"
             android:layout_below="@id/quotedChatMessageView"
             android:layout_alignParentEnd="true"
-            android:adjustViewBounds="true"
+            android:adjustViewBounds="false"
             android:scaleType="centerInside"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:contentDescription="@string/nc_description_send_message_button" />
 
 
