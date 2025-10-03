@@ -79,6 +79,10 @@ public class TalkMessagesListAdapter<M extends IMessage> extends MessagesListAda
         } else if (holder instanceof OutcomingPollMessageViewHolder holderInstance) {
             holderInstance.assignCommonMessageInterface(chatActivity);
             holderInstance.adjustIfNoteToSelf(chatActivity.getCurrentConversation());
+
+        } else if (holder instanceof VideoUploadMessageViewHolder holderInstance) {
+            holderInstance.assignCommonMessageInterface(chatActivity);
+            holderInstance.adjustIfNoteToSelf(chatActivity.getCurrentConversation());
         }
 
         super.onBindViewHolder(holder, position);

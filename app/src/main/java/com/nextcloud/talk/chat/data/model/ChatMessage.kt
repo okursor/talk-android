@@ -16,6 +16,7 @@ import com.nextcloud.talk.R
 import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedApplication
 import com.nextcloud.talk.data.database.model.SendStatus
 import com.nextcloud.talk.data.user.model.User
+import com.nextcloud.talk.models.UploadState
 import com.nextcloud.talk.models.json.chat.ChatUtils.Companion.getParsedMessage
 import com.nextcloud.talk.models.json.chat.ReadStatus
 import com.nextcloud.talk.models.json.converters.EnumSystemMessageTypeConverter
@@ -130,7 +131,34 @@ data class ChatMessage(
 
     var sendStatus: SendStatus? = null,
 
-    var silent: Boolean = false
+    var silent: Boolean = false,
+
+    // Video upload progress fields
+    var uploadState: com.nextcloud.talk.models.UploadState = com.nextcloud.talk.models.UploadState.NONE,
+    
+    var transcodeProgress: Int = 0,
+    
+    var uploadProgress: Int = 0,
+    
+    var processedFrames: Int = 0,
+    
+    var totalFrames: Int = 0,
+    
+    var originalFileSize: Long = 0L,
+    
+    var currentCompressedSize: Long = 0L,
+    
+    var finalCompressedSize: Long = 0L,
+    
+    var compressionRatio: Int = 0,
+    
+    var uploadErrorMessage: String? = null,
+    
+    var localVideoUri: android.net.Uri? = null,
+    
+    var tempCompressedFile: java.io.File? = null,
+    
+    var compressionStartTime: Long = 0L
 
 ) : MessageContentType,
     MessageContentType.Image {
@@ -193,6 +221,11 @@ data class ChatMessage(
             }
         }
         return false
+    }
+
+    fun isVideoUpload(): Boolean {
+        val result = uploadState != null && uploadState != UploadState.NONE
+        return result
     }
 
     @Suppress("ReturnCount")
@@ -259,6 +292,8 @@ data class ChatMessage(
             MessageType.SYSTEM_MESSAGE
         } else if (isVoiceMessage) {
             MessageType.VOICE_MESSAGE
+        } else if (isVideoUpload()) {
+            MessageType.VIDEO_UPLOAD_MESSAGE
         } else if (hasFileAttachment()) {
             MessageType.SINGLE_NC_ATTACHMENT_MESSAGE
         } else if (hasGeoLocation()) {
@@ -363,7 +398,8 @@ data class ChatMessage(
         SINGLE_NC_GEOLOCATION_MESSAGE,
         POLL_MESSAGE,
         VOICE_MESSAGE,
-        DECK_CARD
+        DECK_CARD,
+        VIDEO_UPLOAD_MESSAGE
     }
 
     /**
