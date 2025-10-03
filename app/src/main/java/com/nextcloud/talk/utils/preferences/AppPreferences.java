@@ -141,6 +141,12 @@ public interface AppPreferences {
 
     void removeTheme();
 
+    boolean getSmartwatchModeEnabled();
+
+    void setSmartwatchModeEnabled(boolean enabled);
+
+    void removeSmartwatchModeEnabled();
+
     float getFontScale();
 
     void setFontScale(float value);

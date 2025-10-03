@@ -646,6 +646,20 @@ class SettingsActivity :
             appPreferences.theme = entryVal
         }
 
+        // Smartwatch Mode Toggle - enables/disables font scaling feature
+        binding.settingsSmartwatchModeSwitch.isChecked = appPreferences.getSmartwatchModeEnabled()
+        binding.settingsSmartwatchMode.setOnClickListener {
+            val isChecked = binding.settingsSmartwatchModeSwitch.isChecked
+            binding.settingsSmartwatchModeSwitch.isChecked = !isChecked
+            appPreferences.setSmartwatchModeEnabled(!isChecked)
+            
+            // Enable/disable font scale setting based on smartwatch mode
+            updateFontScaleEnabled()
+        }
+
+        // Initially enable/disable font scale based on current smartwatch mode state
+        updateFontScaleEnabled()
+
         // Font scale setting (Normal, Groß, Sehr groß)
         // Guard the whole block: any unexpected exception here should not crash the SettingsActivity
         try {
@@ -1779,6 +1793,21 @@ class SettingsActivity :
         } catch (e: Exception) {
             try { recreate() } catch (_: Exception) {}
         }
+    }
+
+    private fun updateFontScaleEnabled() {
+        val smartwatchModeEnabled = appPreferences.getSmartwatchModeEnabled()
+        
+        // Enable/disable font scale dropdown and spinner based on smartwatch mode
+        binding.fontScaleInputLayout.isEnabled = smartwatchModeEnabled
+        binding.settingsFontScale.isEnabled = smartwatchModeEnabled
+        binding.settingsFontScaleSpinner.isEnabled = smartwatchModeEnabled
+        
+        // Update alpha to visually indicate disabled state
+        val alpha = if (smartwatchModeEnabled) ENABLED_ALPHA else DISABLED_ALPHA
+        binding.fontScaleInputLayout.alpha = alpha
+        binding.settingsFontScale.alpha = alpha
+        binding.settingsFontScaleSpinner.alpha = alpha
     }
 
     companion object {

@@ -171,9 +171,17 @@ class CallNotificationActivity : CallBaseActivity() {
             }
         }
         // Apply icon/button scaling according to current fontScale
+        // Only if smartwatch mode is enabled
         try {
-            val fontScale = resources.configuration.fontScale
-            applyIncomingButtonScaling(fontScale)
+            val smartwatchMode = try {
+                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getSmartwatchModeEnabled()
+            } catch (_: Throwable) {
+                false
+            }
+            if (smartwatchMode) {
+                val fontScale = resources.configuration.fontScale
+                applyIncomingButtonScaling(fontScale)
+            }
         } catch (_: Throwable) {
             // ignore
         }
