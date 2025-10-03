@@ -484,16 +484,68 @@ class ChatActivity :
         binding = ActivityChatBinding.inflate(layoutInflater)
         setupActionBar()
         // Apply toolbar icon scaling based on stored fontScale preference (defensive)
+        // Only if smartwatch mode is enabled
         try {
-            val scale = try {
-                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+            val smartwatchMode = try {
+                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getSmartwatchModeEnabled()
             } catch (_: Throwable) {
-                resources.configuration.fontScale
+                false
             }
-            applyToolbarIconScaling(scale)
+            if (smartwatchMode) {
+                val scale = try {
+                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+                } catch (_: Throwable) {
+                    resources.configuration.fontScale
+                }
+                applyToolbarIconScaling(scale)
+            }
         } catch (_: Throwable) {
         }
         setContentView(binding.root)
+
+        // Initialize typing indicator and messages list layout based on smartwatch mode
+        try {
+            val smartwatchMode = appPreferences.getSmartwatchModeEnabled()
+            if (smartwatchMode) {
+                // Smartwatch mode: hide completely, no bottom padding needed
+                binding.typingIndicatorWrapper.visibility = View.GONE
+                binding.messagesListView.setPadding(
+                    binding.messagesListView.paddingLeft,
+                    binding.messagesListView.paddingTop,
+                    binding.messagesListView.paddingRight,
+                    0
+                )
+            } else {
+                // Normal mode: set original margin and padding
+                val layoutParams = binding.typingIndicatorWrapper.layoutParams as? android.widget.RelativeLayout.LayoutParams
+                layoutParams?.bottomMargin = DisplayUtils.convertDpToPixel(-19f, this).toInt()
+                binding.typingIndicatorWrapper.layoutParams = layoutParams
+                
+                binding.messagesListView.setPadding(
+                    binding.messagesListView.paddingLeft,
+                    binding.messagesListView.paddingTop,
+                    binding.messagesListView.paddingRight,
+                    DisplayUtils.convertDpToPixel(20f, this).toInt()
+                )
+                
+                // Start with GONE visibility (will be shown by updateTypingIndicator if someone is typing)
+                binding.typingIndicatorWrapper.visibility = View.GONE
+            }
+        } catch (_: Throwable) {
+            // Fallback to normal mode behavior
+            val layoutParams = binding.typingIndicatorWrapper.layoutParams as? android.widget.RelativeLayout.LayoutParams
+            layoutParams?.bottomMargin = DisplayUtils.convertDpToPixel(-19f, this).toInt()
+            binding.typingIndicatorWrapper.layoutParams = layoutParams
+            
+            binding.messagesListView.setPadding(
+                binding.messagesListView.paddingLeft,
+                binding.messagesListView.paddingTop,
+                binding.messagesListView.paddingRight,
+                DisplayUtils.convertDpToPixel(20f, this).toInt()
+            )
+            
+            binding.typingIndicatorWrapper.visibility = View.GONE
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             ViewCompat.setOnApplyWindowInsetsListener(binding.chatContainer) { view, insets ->
@@ -1897,16 +1949,43 @@ class ChatActivity :
         runOnUiThread {
             binding.typingIndicator.text = typingString
 
-            val typingIndicatorPositionY = if (participantNames.size > 0) {
-                TYPING_INDICATOR_POSITION_VISIBLE
-            } else {
-                TYPING_INDICATOR_POSITION_HIDDEN
+            // Hide typing indicator in smartwatch mode to save screen space
+            val smartwatchMode = try {
+                appPreferences.getSmartwatchModeEnabled()
+            } catch (_: Throwable) {
+                false
             }
 
-            binding.typingIndicatorWrapper.animate()
-                .translationY(DisplayUtils.convertDpToPixel(typingIndicatorPositionY, context))
-                .setInterpolator(AccelerateDecelerateInterpolator())
-                .duration = TYPING_INDICATOR_ANIMATION_DURATION
+            if (smartwatchMode) {
+                // In smartwatch mode: completely hide typing indicator (no space reserved)
+                binding.typingIndicatorWrapper.visibility = View.GONE
+            } else {
+                // Normal mode: show/hide typing indicator based on whether someone is typing
+                if (participantNames.size > 0) {
+                    // Someone is typing: show with animation
+                    binding.typingIndicatorWrapper.visibility = View.VISIBLE
+                    binding.typingIndicatorWrapper.animate()
+                        .translationY(DisplayUtils.convertDpToPixel(TYPING_INDICATOR_POSITION_VISIBLE, context))
+                        .setInterpolator(AccelerateDecelerateInterpolator())
+                        .duration = TYPING_INDICATOR_ANIMATION_DURATION
+                } else {
+                    // Nobody is typing: check if already GONE to avoid unnecessary animation
+                    if (binding.typingIndicatorWrapper.visibility == View.VISIBLE) {
+                        // Animate out and then hide
+                        binding.typingIndicatorWrapper.animate()
+                            .translationY(DisplayUtils.convertDpToPixel(TYPING_INDICATOR_POSITION_HIDDEN, context))
+                            .setInterpolator(AccelerateDecelerateInterpolator())
+                            .setDuration(TYPING_INDICATOR_ANIMATION_DURATION)
+                            .withEndAction {
+                                // Only set to GONE if still no one is typing
+                                if (participantNames.size == 0) {
+                                    binding.typingIndicatorWrapper.visibility = View.GONE
+                                }
+                            }
+                            .start()
+                    }
+                }
+            }
         }
     }
 

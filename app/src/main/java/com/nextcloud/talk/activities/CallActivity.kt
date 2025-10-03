@@ -520,18 +520,30 @@ class CallActivity : CallBaseActivity() {
 
         checkInitialDevicePermissions()
         // Apply call button scaling based on user font scale preference
+        // Only if smartwatch mode is enabled
         try {
-            val scale = try {
-                appPreferences.getFontScale()
+            val smartwatchMode = try {
+                appPreferences.getSmartwatchModeEnabled()
             } catch (_: Exception) {
                 try {
-                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getSmartwatchModeEnabled()
                 } catch (_: Exception) {
-                    1.0f
+                    false
                 }
             }
-            applyCallButtonScaling(scale)
-            lastAppliedFontScale = scale
+            if (smartwatchMode) {
+                val scale = try {
+                    appPreferences.getFontScale()
+                } catch (_: Exception) {
+                    try {
+                        com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+                    } catch (_: Exception) {
+                        1.0f
+                    }
+                }
+                applyCallButtonScaling(scale)
+                lastAppliedFontScale = scale
+            }
         } catch (_: Throwable) {
         }
     }
@@ -752,19 +764,31 @@ class CallActivity : CallBaseActivity() {
             Log.e(TAG, "Failed to evict cache")
         }
         // Re-apply scaling if font scale changed while activity was paused
+        // Only if smartwatch mode is enabled
         try {
-            val currentScale = try {
-                appPreferences.getFontScale()
+            val smartwatchMode = try {
+                appPreferences.getSmartwatchModeEnabled()
             } catch (_: Exception) {
                 try {
-                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getSmartwatchModeEnabled()
                 } catch (_: Exception) {
-                    1.0f
+                    false
                 }
             }
-            if (abs(currentScale - lastAppliedFontScale) > 0.01f) {
-                applyCallButtonScaling(currentScale)
-                lastAppliedFontScale = currentScale
+            if (smartwatchMode) {
+                val currentScale = try {
+                    appPreferences.getFontScale()
+                } catch (_: Exception) {
+                    try {
+                        com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+                    } catch (_: Exception) {
+                        1.0f
+                    }
+                }
+                if (abs(currentScale - lastAppliedFontScale) > 0.01f) {
+                    applyCallButtonScaling(currentScale)
+                    lastAppliedFontScale = currentScale
+                }
             }
         } catch (_: Throwable) {
         }

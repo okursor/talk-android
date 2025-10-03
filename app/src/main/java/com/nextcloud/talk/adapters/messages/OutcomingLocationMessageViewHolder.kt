@@ -91,10 +91,20 @@ class OutcomingLocationMessageViewHolder(incomingView: View) :
         // base text size in pixels from resources (dimens defined in sp)
         val baseTextPx = context.resources.getDimension(R.dimen.chat_text_size)
         // apply app fontScale if available, fallback to system font scale
-        val fontScale = try {
-            appPreferences.getFontScale()
+        // Only if smartwatch mode is enabled
+        val smartwatchMode = try {
+            appPreferences.getSmartwatchModeEnabled()
         } catch (_: Throwable) {
-            context.resources.configuration.fontScale
+            false
+        }
+        val fontScale = if (smartwatchMode) {
+            try {
+                appPreferences.getFontScale()
+            } catch (_: Throwable) {
+                context.resources.configuration.fontScale
+            }
+        } else {
+            1.0f // master behavior - no scaling
         }
         val textSize = baseTextPx * fontScale
 

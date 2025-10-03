@@ -579,6 +579,24 @@ class AppPreferencesImpl(val context: Context) : AppPreferences {
             }
         }
 
+    // Smartwatch mode preference accessors
+    override fun getSmartwatchModeEnabled(): Boolean =
+        runBlocking {
+            async { readBoolean(SMARTWATCH_MODE_ENABLED, false).first() }
+        }.getCompleted()
+
+    override fun setSmartwatchModeEnabled(enabled: Boolean) {
+        runBlocking<Unit> {
+            async { writeBoolean(SMARTWATCH_MODE_ENABLED, enabled) }
+        }
+    }
+
+    override fun removeSmartwatchModeEnabled() {
+        runBlocking<Unit> {
+            async { writeBoolean(SMARTWATCH_MODE_ENABLED, false) }
+        }
+    }
+
     override fun clear() {}
 
     // Font scale preference accessors
@@ -727,6 +745,7 @@ class AppPreferencesImpl(val context: Context) : AppPreferences {
         const val LAST_NOTIFICATION_WARNING = "last_notification_warning"
         const val CONVERSATION_LIST_POSITION_OFFSET = "CONVERSATION_LIST_POSITION_OFFSET"
         const val IMAGE_COMPRESSION_LEVEL = "image_compression_level"
+        const val SMARTWATCH_MODE_ENABLED = "smartwatch_mode_enabled"
     const val FONT_SCALE = "font_scale"
     const val FONT_SCALE_VERSION = "font_scale_version"
         private fun String.convertStringToArray(): Array<Float> {

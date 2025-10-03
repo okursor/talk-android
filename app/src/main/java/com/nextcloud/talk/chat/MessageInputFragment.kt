@@ -267,22 +267,34 @@ class MessageInputFragment : Fragment() {
         }
 
         // Apply input scaling only to the internal buttons (do not touch the whole view)
+        // Only if smartwatch mode is enabled
         try {
+            val smartwatchMode = com.nextcloud.talk.utils.preferences.AppPreferencesImpl(requireContext()).getSmartwatchModeEnabled()
+            if (smartwatchMode) {
                 val scale = com.nextcloud.talk.utils.preferences.AppPreferencesImpl(requireContext()).getFontScale()
                 applyMessageInputButtonsScaling(scale)
+            }
         } catch (_: Throwable) {}
     }
 
     override fun onStart() {
         super.onStart()
         // Re-apply scaling only to buttons in case layout/insets changed while fragment was paused
+        // Only if smartwatch mode is enabled
         try {
-            val scale = try {
-                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(requireContext()).getFontScale()
+            val smartwatchMode = try {
+                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(requireContext()).getSmartwatchModeEnabled()
             } catch (_: Throwable) {
-                resources.configuration.fontScale
+                false
             }
-            applyMessageInputButtonsScaling(scale)
+            if (smartwatchMode) {
+                val scale = try {
+                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl(requireContext()).getFontScale()
+                } catch (_: Throwable) {
+                    resources.configuration.fontScale
+                }
+                applyMessageInputButtonsScaling(scale)
+            }
         } catch (_: Throwable) {}
     }
 

@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
   <resources>
+        <string name="nc_settings_smartwatch_mode_title">Smartwatch-Modus</string>
+        <string name="nc_settings_smartwatch_mode_desc">Aktiviere Schriftskalierung für bessere Lesbarkeit auf kleinen Bildschirmen</string>
         <string name="nc_settings_font_scale_title">Schriftgröße</string>
         <string name="nc_settings_font_scale_normal">Normal</string>
         <string name="nc_settings_font_scale_large">Groß</string>

@@ -67,17 +67,22 @@ open class BaseActivity : AppCompatActivity() {
         // Injection hasn't run yet here, so fall back to a direct DataStore-backed
         // implementation if the injected AppPreferences is not available.
         var scale = 1.0f
+        var smartwatchMode = false
         try {
-            scale = if (this::appPreferences.isInitialized) {
-                appPreferences.getFontScale()
+            if (this::appPreferences.isInitialized) {
+                smartwatchMode = appPreferences.getSmartwatchModeEnabled()
+                scale = appPreferences.getFontScale()
             } else {
                 try {
                     // Directly instantiate the DataStore-backed implementation to
                     // synchronously retrieve the stored font scale prior to injection.
-                    AppPreferencesImpl(newBase).getFontScale()
+                    val prefs = AppPreferencesImpl(newBase)
+                    smartwatchMode = prefs.getSmartwatchModeEnabled()
+                    scale = prefs.getFontScale()
                 } catch (e: Exception) {
                     // If anything goes wrong reading preferences here, keep default
-                    1.0f
+                    smartwatchMode = false
+                    scale = 1.0f
                 }
             }
         } catch (e: Exception) {
@@ -86,7 +91,10 @@ open class BaseActivity : AppCompatActivity() {
 
         val config = newBase.resources.configuration
         val newConfig = android.content.res.Configuration(config)
-        newConfig.fontScale = scale
+        // Only apply font scale if smartwatch mode is enabled
+        if (smartwatchMode) {
+            newConfig.fontScale = scale
+        }
         val ctx = newBase.createConfigurationContext(newConfig)
         super.attachBaseContext(ctx)
     }
@@ -143,11 +151,14 @@ open class BaseActivity : AppCompatActivity() {
         // itself to avoid interfering with the settings UI.
         try {
             if (this !is com.nextcloud.talk.settings.SettingsActivity) {
-                val current = try { appPreferences.getFontScale() } catch (_: Throwable) { 1.0f }
-                if (abs(current - lastSeenFontScale) > 0.01f) {
-                    Log.d(TAG, "Font scale changed from $lastSeenFontScale to $current — recreating activity")
-                    lastSeenFontScale = current
-                    recreate()
+                val smartwatchMode = try { appPreferences.getSmartwatchModeEnabled() } catch (_: Throwable) { false }
+                if (smartwatchMode) {
+                    val current = try { appPreferences.getFontScale() } catch (_: Throwable) { 1.0f }
+                    if (abs(current - lastSeenFontScale) > 0.01f) {
+                        Log.d(TAG, "Font scale changed from $lastSeenFontScale to $current — recreating activity")
+                        lastSeenFontScale = current
+                        recreate()
+                    }
                 }
             }
         } catch (e: Exception) {
