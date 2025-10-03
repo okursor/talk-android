@@ -483,6 +483,16 @@ class ChatActivity :
 
         binding = ActivityChatBinding.inflate(layoutInflater)
         setupActionBar()
+        // Apply toolbar icon scaling based on stored fontScale preference (defensive)
+        try {
+            val scale = try {
+                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+            } catch (_: Throwable) {
+                resources.configuration.fontScale
+            }
+            applyToolbarIconScaling(scale)
+        } catch (_: Throwable) {
+        }
         setContentView(binding.root)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
@@ -1483,6 +1493,143 @@ class ChatActivity :
         viewThemeUtils.material.themeToolbar(binding.chatToolbar)
     }
 
+
+    // Minimal helper: scale toolbar/menu icons visually by reducing padding and using CENTER_INSIDE
+    // This is defensive and avoids changing toolbar measured height.
+    private fun applyToolbarIconScaling(fontScale: Float) {
+        try {
+            val baseButtonDp = 48f
+            val baseIconDp = 24f
+            val minIconDp = 16f
+            val maxIconDp = 32f
+
+            val targetIconDp = kotlin.math.max(minIconDp, kotlin.math.min(baseIconDp * fontScale, maxIconDp))
+            val buttonPx = (baseButtonDp * resources.displayMetrics.density).toInt()
+            val iconPx = (targetIconDp * resources.displayMetrics.density).toInt()
+            val pad = kotlin.math.max(0, (buttonPx - iconPx) / 2)
+
+            Log.d(TAG, "applyToolbarIconScaling called: fontScale=$fontScale targetIconDp=$targetIconDp pad=$pad")
+
+            // Inspect toolbar children
+            try {
+                val tb = binding.chatToolbar
+                var totalChildren = 0
+                var imageViewsFound = 0
+                fun inspect(view: View, depth: Int = 0) {
+                    totalChildren++
+                    val indent = "".padStart(depth * 2)
+                    try {
+                        Log.d(TAG, "toolbar child: $indent ${view::class.java.simpleName} id=${view.id}")
+                        if (view is ImageView) {
+                            imageViewsFound++
+                            val dw = view.drawable
+                            val intrinsicW = dw?.intrinsicWidth ?: -1
+                            val intrinsicH = dw?.intrinsicHeight ?: -1
+                            Log.d(TAG, "  -> ImageView measured=${view.measuredWidth}x${view.measuredHeight} padding=${view.paddingLeft},${view.paddingTop},${view.paddingRight},${view.paddingBottom} drawableIntrinsic=${intrinsicW}x${intrinsicH} layoutParams=${view.layoutParams}")
+                        }
+                    } catch (_: Throwable) {}
+                    if (view is ViewGroup) {
+                        for (i in 0 until view.childCount) {
+                            try { inspect(view.getChildAt(i), depth + 1) } catch (_: Throwable) {}
+                        }
+                    }
+                }
+                inspect(tb)
+                Log.d(TAG, "applyToolbarIconScaling: toolbar children=$totalChildren imageViews=$imageViewsFound")
+            } catch (_: Throwable) {}
+
+            // Apply to descendants (attempt even for small scales so we can observe effect)
+            try {
+                var changed = 0
+                fun applyToDescendants(view: View) {
+                    try {
+                        if (view is ImageView) {
+                            try {
+                                view.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                                view.setPadding(pad, pad, pad, pad)
+                                changed++
+                                Log.d(TAG, "applyToolbarIconScaling: modified ImageView id=${view.id} measured=${view.measuredWidth}x${view.measuredHeight}")
+                                // If the ImageView is smaller than the desired icon, try to enlarge the view to give room
+                                try {
+                                    val minSize = iconPx
+                                    val lp = view.layoutParams
+                                    if ((view.measuredWidth <= 0 || view.measuredWidth < minSize) || (view.measuredHeight <= 0 || view.measuredHeight < minSize)) {
+                                        if (lp != null) {
+                                            lp.width = buttonPx
+                                            lp.height = buttonPx
+                                            view.layoutParams = lp
+                                            view.requestLayout()
+                                            Log.d(TAG, "applyToolbarIconScaling: resized ImageView id=${view.id} to ${buttonPx}x${buttonPx}")
+                                        }
+                                    }
+                                } catch (_: Throwable) {}
+                            } catch (_: Throwable) { Log.d(TAG, "applyToolbarIconScaling: failed to modify ImageView id=${view.id}") }
+                        }
+                        if (view is ViewGroup) {
+                            for (i in 0 until view.childCount) {
+                                val child = view.getChildAt(i)
+                                applyToDescendants(child)
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+
+                applyToDescendants(binding.chatToolbar)
+                Log.d(TAG, "applyToolbarIconScaling: adjusted ImageViews=$changed")
+            } catch (_: Throwable) {}
+
+            // Fallback: menu anchor views
+            try {
+                val menuItemViews = listOfNotNull(
+                    findViewById<View?>(R.id.conversation_voice_call),
+                    findViewById<View?>(R.id.conversation_video_call),
+                    findViewById<View?>(R.id.conversation_event),
+                    findViewById<View?>(R.id.conversation_info),
+                    findViewById<View?>(R.id.conversation_search)
+                )
+                menuItemViews.forEach { v ->
+                    try {
+                        if (v is ImageView) {
+                            v.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                            v.setPadding(pad, pad, pad, pad)
+                            Log.d(TAG, "applyToolbarIconScaling: modified menu ImageView id=${v.id}")
+                        } else {
+                            val iv = v.findViewById<ImageView?>(android.R.id.icon)
+                            if (iv != null) {
+                                iv.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                                iv.setPadding(pad, pad, pad, pad)
+                                Log.d(TAG, "applyToolbarIconScaling: modified nested menu ImageView in id=${v.id}")
+                            }
+                        }
+                    } catch (_: Throwable) { Log.d(TAG, "applyToolbarIconScaling: failed menu tweak for id=${v.id}") }
+                }
+            } catch (_: Throwable) {}
+
+            // Additionally, try to replace menu item icons in the ActionBar menu with generated bitmaps of desired size
+            try {
+                if (chatMenu != null) {
+                    val ids = listOf(R.id.conversation_voice_call, R.id.conversation_video_call, R.id.conversation_event, R.id.conversation_info, R.id.conversation_search)
+                    for (id in ids) {
+                        try {
+                            val mi = chatMenu?.findItem(id)
+                            val icon = mi?.icon
+                            if (icon != null) {
+                                try {
+                                    val bmp = icon.toBitmap(iconPx, iconPx)
+                                    mi.icon = android.graphics.drawable.BitmapDrawable(resources, bmp)
+                                    Log.d(TAG, "applyToolbarIconScaling: replaced menu icon for id=$id with ${iconPx}x${iconPx} bitmap")
+                                } catch (_: Throwable) { Log.d(TAG, "applyToolbarIconScaling: failed to create bitmap for menu id=$id") }
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                }
+            } catch (_: Throwable) {}
+
+        } catch (_: Throwable) {
+            Log.d(TAG, "applyToolbarIconScaling: unexpected error")
+        }
+    }
+
     private fun initAdapter() {
         val senderId = if (!conversationUser!!.userId.equals("?")) {
             "users/" + conversationUser!!.userId
@@ -1809,29 +1956,107 @@ class ChatActivity :
 
                 private fun setIcon(drawable: Drawable?) {
                     supportActionBar?.let {
-                        val avatarSize = (it.height / TOOLBAR_AVATAR_RATIO).roundToInt()
-                        val size = DisplayUtils.convertDpToPixel(STATUS_SIZE_IN_DP, context)
-                        if (drawable != null && avatarSize > 0) {
-                            val bitmap = drawable.toBitmap(avatarSize, avatarSize)
-                            val status = StatusDrawable(
-                                currentConversation!!.status,
-                                null,
-                                size,
-                                0,
-                                binding.chatToolbar.context
-                            )
-                            viewThemeUtils.talk.themeStatusDrawable(context, status)
-                            binding.chatToolbar.findViewById<ImageView>(R.id.chat_toolbar_avatar)
-                                .setImageDrawable(bitmap.toDrawable(resources))
-                            binding.chatToolbar.findViewById<ImageView>(R.id.chat_toolbar_status)
-                                .setImageDrawable(status)
-                            binding.chatToolbar.findViewById<ImageView>(R.id.chat_toolbar_status).contentDescription =
-                                currentConversation?.status
-                            binding.chatToolbar.findViewById<FrameLayout>(R.id.chat_toolbar_avatar_container)
-                                .visibility = View.VISIBLE
-                        } else {
-                            Log.d(TAG, "loadAvatarForStatusBar avatarSize <= 0")
-                        }
+                        try {
+                            // Read app fontScale preference (fallback to system)
+                            val fontScale = try {
+                                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this@ChatActivity).getFontScale()
+                            } catch (_: Throwable) {
+                                resources.configuration.fontScale
+                            }
+
+                            // Base container size is defined in layout as 46dp; scale it with fontScale but bound it
+                            val baseContainerDp = 46f
+                            val minDp = baseContainerDp
+                            val maxDp = 80f
+                            val targetContainerDp = kotlin.math.max(minDp, kotlin.math.min(baseContainerDp * fontScale, maxDp))
+                            val containerPx = DisplayUtils.convertDpToPixel(targetContainerDp, context)
+
+                            // Avatar bitmap size slightly smaller than container to keep padding
+                            val avatarPx = (containerPx * 0.9f).toInt().coerceAtLeast(1)
+
+                            val size = DisplayUtils.convertDpToPixel(STATUS_SIZE_IN_DP, context)
+                            if (drawable != null) {
+                                // replace with a bitmap at the computed avatarPx so intrinsic size increases
+                                val bitmap = try { drawable.toBitmap(avatarPx, avatarPx) } catch (_: Throwable) { null }
+                                val status = StatusDrawable(
+                                    currentConversation!!.status,
+                                    null,
+                                    size,
+                                    0,
+                                    binding.chatToolbar.context
+                                )
+                                viewThemeUtils.talk.themeStatusDrawable(context, status)
+
+                                // adjust container and image layout params
+                                try {
+                                    val container = binding.chatToolbar.findViewById<FrameLayout>(R.id.chat_toolbar_avatar_container)
+                                    val avatarView = binding.chatToolbar.findViewById<ImageView>(R.id.chat_toolbar_avatar)
+                                    val statusView = binding.chatToolbar.findViewById<ImageView>(R.id.chat_toolbar_status)
+
+                                    val lpContainer = container.layoutParams
+                                    lpContainer.width = containerPx.toInt()
+                                    lpContainer.height = containerPx.toInt()
+                                    // if the container is hosted in a Toolbar, anchor it to top|start
+                                    try {
+                                        val tbLp = lpContainer as? androidx.appcompat.widget.Toolbar.LayoutParams
+                                        if (tbLp != null) {
+                                            tbLp.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                                            container.layoutParams = tbLp
+                                        } else {
+                                            container.layoutParams = lpContainer
+                                        }
+                                    } catch (_: Throwable) {
+                                        container.layoutParams = lpContainer
+                                    }
+
+                                    val lpAvatar = avatarView.layoutParams
+                                    lpAvatar.width = (containerPx * 0.9f).toInt()
+                                    lpAvatar.height = (containerPx * 0.9f).toInt()
+                                    // ensure the avatar image is centered inside the container
+                                    if (lpAvatar is FrameLayout.LayoutParams) {
+                                        // anchor the avatar image to the top-left of the container
+                                        lpAvatar.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                                        // nudge it a few pixels down so it's not flush to the very top
+                                        lpAvatar.topMargin = 3
+                                    }
+                                    avatarView.layoutParams = lpAvatar
+                                    // use CENTER_INSIDE to keep a small gap at the top while keeping the image centered
+                                    avatarView.scaleType = ImageView.ScaleType.CENTER_INSIDE
+
+                                    // status icon keep relative size (no change)
+                                    statusView.layoutParams = statusView.layoutParams
+
+                                    // Apply new drawable if bitmap could be created
+                                    if (bitmap != null) {
+                                        avatarView.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, bitmap))
+                                    } else {
+                                        // fallback: set original drawable but scaled via toDrawable on container size
+                                        val fallback = try { drawable.toBitmap(avatarPx, avatarPx) } catch (_: Throwable) { null }
+                                        if (fallback != null) avatarView.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, fallback))
+                                    }
+
+                                    statusView.setImageDrawable(status)
+                                    statusView.contentDescription = currentConversation?.status
+                                    container.visibility = View.VISIBLE
+                                } catch (_: Throwable) {
+                                    // last resort: previous behavior
+                                    try {
+                                        val avatarSize = (it.height / TOOLBAR_AVATAR_RATIO).roundToInt()
+                                        if (avatarSize > 0) {
+                                            val bitmap2 = drawable.toBitmap(avatarSize, avatarSize)
+                                            binding.chatToolbar.findViewById<ImageView>(R.id.chat_toolbar_avatar)
+                                                .setImageDrawable(bitmap2.toDrawable(resources))
+                                            binding.chatToolbar.findViewById<ImageView>(R.id.chat_toolbar_status)
+                                                .setImageDrawable(StatusDrawable(currentConversation!!.status, null, size, 0, binding.chatToolbar.context))
+                                            binding.chatToolbar.findViewById<FrameLayout>(R.id.chat_toolbar_avatar_container)
+                                                .visibility = View.VISIBLE
+                                        }
+                                    } catch (_: Throwable) { Log.d(TAG, "loadAvatarForStatusBar failed to set avatar") }
+                                }
+                            } else {
+                                Log.d(TAG, "loadAvatarForStatusBar drawable null")
+                            }
+                        } catch (_: Throwable) { Log.d(TAG, "loadAvatarForStatusBar: unexpected error") }
                     }
                 }
 
@@ -3229,6 +3454,16 @@ class ChatActivity :
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         super.onCreateOptionsMenu(menu)
         menuInflater.inflate(R.menu.menu_conversation, menu)
+        // Re-apply toolbar/menu icon scaling after menu is inflated
+        try {
+            val scale = try {
+                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+            } catch (_: Throwable) {
+                resources.configuration.fontScale
+            }
+            applyToolbarIconScaling(scale)
+        } catch (_: Throwable) {
+        }
         chatMenu = menu
 
         if (currentConversation?.objectType == ConversationEnums.ObjectType.EVENT) {
