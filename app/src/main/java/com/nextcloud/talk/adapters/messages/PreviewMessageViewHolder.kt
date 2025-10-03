@@ -96,6 +96,11 @@ abstract class PreviewMessageViewHolder(itemView: View?, payload: Any?) :
     @SuppressLint("SetTextI18n")
     @Suppress("NestedBlockDepth", "ComplexMethod", "LongMethod")
     override fun onBind(message: ChatMessage) {
+        // Early return for video upload messages - they should be handled by VideoUploadMessageViewHolder
+        if (message.isVideoUpload()) {
+            return
+        }
+        
         super.onBind(message)
         image.minimumHeight = DisplayUtils.convertDpToPixel(MIN_IMAGE_HEIGHT, context!!).toInt()
 
@@ -221,7 +226,12 @@ abstract class PreviewMessageViewHolder(itemView: View?, payload: Any?) :
     }
 
     override fun getPayloadForImageLoader(message: ChatMessage?): Any? {
-        if (message!!.selectedIndividualHashMap!!.containsKey(KEY_CONTACT_NAME)) {
+        // Null-safe check for video upload messages
+        if (message == null || message.isVideoUpload() || message.selectedIndividualHashMap == null) {
+            return null
+        }
+        
+        if (message.selectedIndividualHashMap!!.containsKey(KEY_CONTACT_NAME)) {
             previewContainer.visibility = View.GONE
             previewContactContainer.visibility = View.VISIBLE
             previewContactName.text = message.selectedIndividualHashMap!![KEY_CONTACT_NAME]

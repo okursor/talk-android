@@ -1602,6 +1602,16 @@ class ChatActivity :
             R.layout.item_custom_outcoming_text_message
         )
 
+        // Register VideoUploadMessageViewHolder BEFORE Image configs to give it higher priority
+        messageHolders.registerContentType(
+            CONTENT_TYPE_VIDEO_UPLOAD,
+            VideoUploadMessageViewHolder::class.java,
+            R.layout.item_custom_outcoming_video_upload_message,
+            VideoUploadMessageViewHolder::class.java,
+            R.layout.item_custom_outcoming_video_upload_message,
+            this
+        )
+
         messageHolders.setIncomingImageConfig(
             IncomingPreviewMessageViewHolder::class.java,
             R.layout.item_custom_incoming_preview_message,
@@ -1682,16 +1692,6 @@ class ChatActivity :
             OutcomingDeckCardViewHolder::class.java,
             payload,
             R.layout.item_custom_outcoming_deck_card_message,
-            this
-        )
-
-        // Register VideoUploadMessageViewHolder for upload progress messages
-        messageHolders.registerContentType(
-            CONTENT_TYPE_VIDEO_UPLOAD,
-            VideoUploadMessageViewHolder::class.java,
-            R.layout.item_custom_outcoming_video_upload_message,
-            VideoUploadMessageViewHolder::class.java,
-            R.layout.item_custom_outcoming_video_upload_message,
             this
         )
 
