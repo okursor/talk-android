@@ -70,6 +70,9 @@ class OutcomingLocationMessageViewHolder(incomingView: View) :
     lateinit var messageUtils: MessageUtils
 
     @Inject
+    lateinit var appPreferences: com.nextcloud.talk.utils.preferences.AppPreferences
+
+    @Inject
     lateinit var dateUtils: DateUtils
 
     lateinit var commonMessageInterface: CommonMessageInterface
@@ -85,7 +88,15 @@ class OutcomingLocationMessageViewHolder(incomingView: View) :
         val layoutParams = binding.messageTime.layoutParams as FlexboxLayout.LayoutParams
         layoutParams.isWrapBefore = false
 
-        val textSize = context.resources.getDimension(R.dimen.chat_text_size)
+        // base text size in pixels from resources (dimens defined in sp)
+        val baseTextPx = context.resources.getDimension(R.dimen.chat_text_size)
+        // apply app fontScale if available, fallback to system font scale
+        val fontScale = try {
+            appPreferences.getFontScale()
+        } catch (_: Throwable) {
+            context.resources.configuration.fontScale
+        }
+        val textSize = baseTextPx * fontScale
 
         colorizeMessageBubble(message)
         binding.messageText.setTextSize(TypedValue.COMPLEX_UNIT_PX, textSize)
