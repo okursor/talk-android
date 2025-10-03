@@ -257,6 +257,12 @@ data class ChatMessage(
 
     @Suppress("Detekt.NestedBlockDepth")
     override fun getImageUrl(): String? {
+        // Return null for video uploads to prevent Image handler from being used
+        // This ensures VideoUploadMessageViewHolder is used instead of OutcomingPreviewMessageViewHolder
+        if (isVideoUpload()) {
+            return null
+        }
+        
         if (messageParameters != null && messageParameters!!.size > 0) {
             for ((_, individualHashMap) in messageParameters!!) {
                 if (isHashMapEntryEqualTo(individualHashMap, "type", "file")) {

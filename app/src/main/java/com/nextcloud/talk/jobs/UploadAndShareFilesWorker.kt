@@ -219,6 +219,17 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             .build()
 
         mNotifyManager!!.notify(notificationId, progressUpdateNotification)
+        
+        // Also update WorkManager progress for UI observation
+        setProgressAsync(
+            Data.Builder()
+                .putString("status", "uploading")
+                .putString("fileName", fileName)
+                .putInt("progress", percentage)
+                .putString("phase", "Wird hochgeladen...")
+                .putLong("currentSizeBytes", file?.length() ?: 0L)
+                .build()
+        )
     }
 
     override fun onStopped() {
@@ -808,6 +819,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 .build()
             val uploadWorker: OneTimeWorkRequest = OneTimeWorkRequest.Builder(UploadAndShareFilesWorker::class.java)
                 .setInputData(data)
+                .addTag("upload_file") // Add tag for WorkManager observation
+                .addTag("upload_$fileUri") // Add unique tag for this specific upload
                 .build()
 
             Log.d(TAG, "🚀 WORKER SETUP: Enqueueing work with ID: ${uploadWorker.id}")

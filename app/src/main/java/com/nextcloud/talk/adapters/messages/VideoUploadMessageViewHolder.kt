@@ -53,13 +53,24 @@ class VideoUploadMessageViewHolder(
         
         // Safety check - if any critical views are null, don't bind
         try {
-            bind(message)
+            bindVideoUpload(message)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Error binding VideoUploadMessageViewHolder", e)
         }
     }
 
-    private fun bind(message: ChatMessage) {
+    // Handle partial updates for progress changes
+    fun onBind(message: ChatMessage, payload: Any?) {
+        if (payload == "progress_update") {
+            // Only update progress, don't rebind everything
+            updateProgressDisplay(message)
+        } else {
+            // Full bind
+            onBind(message)
+        }
+    }
+
+    private fun bindVideoUpload(message: ChatMessage) {
         // Basis-Setup
         thumbnailView.setImageResource(R.drawable.ic_mimetype_video)
         
