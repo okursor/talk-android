@@ -698,13 +698,19 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun stopAndSendAudioRecording(roomToken: String = "", replyToMessageId: Int? = null, displayName: String) {
+    fun stopAndSendAudioRecording(
+        context: Context,
+        roomToken: String = "",
+        replyToMessageId: Int? = null,
+        displayName: String
+    ) {
         stopAudioRecording()
 
         if (mediaRecorderManager.mediaRecorderState != MediaRecorderManager.MediaRecorderState.ERROR) {
             val uri = Uri.fromFile(File(mediaRecorderManager.currentVoiceRecordFile))
             Log.d(TAG, "File uploaded")
             uploadFile(
+                context = context,
                 fileUri = uri.toString(),
                 isVoiceMessage = true,
                 caption = "",
@@ -725,6 +731,7 @@ class ChatViewModel @Inject constructor(
     fun getCurrentVoiceRecordFile(): String = mediaRecorderManager.currentVoiceRecordFile
 
     fun uploadFile(
+        context: Context,
         fileUri: String,
         isVoiceMessage: Boolean,
         caption: String = "",
@@ -758,14 +765,21 @@ class ChatViewModel @Inject constructor(
 
         try {
             require(fileUri.isNotEmpty())
+            Log.d("ChatViewModel", "🚀 UPLOAD START: Starting upload for fileUri: $fileUri")
+            Log.d("ChatViewModel", "🚀 UPLOAD START: roomToken: $room")
+            Log.d("ChatViewModel", "🚀 UPLOAD START: displayName: $displayName")
+            Log.d("ChatViewModel", "🚀 UPLOAD START: metaData: $metaData")
+
             UploadAndShareFilesWorker.upload(
+                context,
                 fileUri,
                 room,
                 displayName,
                 metaData
             )
+            Log.d("ChatViewModel", "✅ UPLOAD START: Worker.upload() called successfully")
         } catch (e: IllegalArgumentException) {
-            Log.e(javaClass.simpleName, "Something went wrong when trying to upload file", e)
+            Log.e(javaClass.simpleName, "❌ UPLOAD START: Something went wrong when trying to upload file", e)
         }
     }
 

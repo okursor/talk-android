@@ -416,6 +416,7 @@ class MessageInputFragment : Fragment() {
 
         (binding.fragmentMessageInputView.inputEditText as ImageEmojiEditText).onCommitContentListener = {
             chatActivity.chatViewModel.uploadFile(
+                context = chatActivity,
                 fileUri = it.toString(),
                 isVoiceMessage = false,
                 caption = "",
@@ -572,6 +573,7 @@ class MessageInputFragment : Fragment() {
                         return@setOnTouchListener false
                     } else {
                         chatActivity.chatViewModel.stopAndSendAudioRecording(
+                            context = chatActivity,
                             roomToken = chatActivity.roomToken,
                             replyToMessageId = chatActivity.getReplyToMessageId(),
                             displayName = chatActivity.currentConversation!!.displayName

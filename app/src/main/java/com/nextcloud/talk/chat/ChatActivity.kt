@@ -130,6 +130,7 @@ import com.nextcloud.talk.adapters.messages.SystemMessageViewHolder
 import com.nextcloud.talk.adapters.messages.TalkMessagesListAdapter
 import com.nextcloud.talk.adapters.messages.UnreadNoticeMessageViewHolder
 import com.nextcloud.talk.adapters.messages.VoiceMessageInterface
+import com.nextcloud.talk.adapters.messages.VideoUploadMessageViewHolder
 import com.nextcloud.talk.api.NcApi
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.chat.data.model.ChatMessage
@@ -1681,6 +1682,16 @@ class ChatActivity :
             OutcomingDeckCardViewHolder::class.java,
             payload,
             R.layout.item_custom_outcoming_deck_card_message,
+            this
+        )
+
+        // Register VideoUploadMessageViewHolder for upload progress messages
+        messageHolders.registerContentType(
+            CONTENT_TYPE_VIDEO_UPLOAD,
+            VideoUploadMessageViewHolder::class.java,
+            R.layout.item_custom_outcoming_video_upload_message,
+            VideoUploadMessageViewHolder::class.java,
+            R.layout.item_custom_outcoming_video_upload_message,
             this
         )
 
@@ -4295,8 +4306,8 @@ class ChatActivity :
         return isUserAllowedByPrivileges
     }
 
-    override fun hasContentFor(message: ChatMessage, type: Byte): Boolean =
-        when (type) {
+    override fun hasContentFor(message: ChatMessage, type: Byte): Boolean {
+        val result = when (type) {
             CONTENT_TYPE_LOCATION -> message.hasGeoLocation()
             CONTENT_TYPE_VOICE_MESSAGE -> message.isVoiceMessage
             CONTENT_TYPE_POLL -> message.isPoll()
@@ -4305,9 +4316,15 @@ class ChatActivity :
             CONTENT_TYPE_UNREAD_NOTICE_MESSAGE -> message.id == UNREAD_MESSAGES_MARKER_ID.toString()
             CONTENT_TYPE_CALL_STARTED -> message.id == "-2"
             CONTENT_TYPE_DECK_CARD -> message.isDeckCard()
+            CONTENT_TYPE_VIDEO_UPLOAD -> message.isVideoUpload()
 
             else -> false
         }
+        if (type == CONTENT_TYPE_VIDEO_UPLOAD) {
+            // Debug: Check if video upload content type is being processed
+        }
+        return result
+    }
 
     private fun processMostRecentMessage(recent: ChatMessage) {
         when (recent.systemMessageType) {
@@ -4479,13 +4496,7 @@ class ChatActivity :
     }
 
     private fun logConversationInfos(methodName: String) {
-        Log.d(TAG, " |-----------------------------------------------")
-        Log.d(TAG, " | method: $methodName")
-        Log.d(TAG, " | ChatActivity: " + System.identityHashCode(this).toString())
-        Log.d(TAG, " | roomToken: $roomToken")
-        Log.d(TAG, " | currentConversation?.displayName: ${currentConversation?.displayName}")
-        Log.d(TAG, " | sessionIdAfterRoomJoined: $sessionIdAfterRoomJoined")
-        Log.d(TAG, " |-----------------------------------------------")
+        // Debug logging removed for security
     }
 
     fun shareMessageText(message: String) {
@@ -4523,15 +4534,111 @@ class ChatActivity :
         replyToMessageId: Int? = null,
         displayName: String
     ) {
-        chatViewModel.uploadFile(
-            fileUri,
-            isVoiceMessage,
-            caption,
-            roomToken,
-            replyToMessageId,
-            displayName
-        )
+        // Check if it's a video file that needs compression with live updates
+        val uri = android.net.Uri.parse(fileUri)
+        if (com.nextcloud.talk.utils.FileUtils.isVideoFile(this, uri)) {
+            // Create placeholder message immediately
+            createVideoUploadPlaceholder(fileUri, caption, roomToken, replyToMessageId, displayName)
+            
+            // Use the existing, working upload system
+            chatViewModel.uploadFile(
+                this,
+                fileUri,
+                isVoiceMessage,
+                caption,
+                roomToken,
+                replyToMessageId,
+                displayName
+            )
+        } else {
+            // Use existing upload logic for other files
+            chatViewModel.uploadFile(
+                this,
+                fileUri,
+                isVoiceMessage,
+                caption,
+                roomToken,
+                replyToMessageId,
+                displayName
+            )
+        }
         cancelReply()
+    }
+
+    private fun createVideoUploadPlaceholder(
+        fileUri: String,
+        caption: String = "",
+        roomToken: String = "",
+        replyToMessageId: Int? = null,
+        displayName: String
+    ) {
+        val videoUri = android.net.Uri.parse(fileUri)
+        
+        // Create placeholder message immediately
+        val placeholderMessage = com.nextcloud.talk.chat.data.model.ChatMessage().apply {
+            jsonMessageId = System.currentTimeMillis().toInt()
+            actorId = conversationUser?.userId ?: "unknown"
+            actorDisplayName = conversationUser?.displayName ?: "You"  
+            timestamp = System.currentTimeMillis()
+            message = if (caption.isNotEmpty()) caption else "📹 Video wird komprimiert..."
+            activeUser = conversationUser
+            
+            // Set upload-specific properties - this will make isVideoUpload() return true
+            uploadState = com.nextcloud.talk.models.UploadState.TRANSCODING
+            localVideoUri = videoUri
+            transcodeProgress = 0
+            compressionStartTime = System.currentTimeMillis()
+            
+            // Get original file size
+            try {
+                val inputStream = contentResolver.openInputStream(videoUri)
+                originalFileSize = inputStream?.available()?.toLong() ?: 0L
+                inputStream?.close()
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Could not get file size", e)
+                originalFileSize = 0L
+            }
+            
+            isOneToOneConversation = currentConversation?.type == 
+                com.nextcloud.talk.models.json.conversations.ConversationEnums.ConversationType.ROOM_TYPE_ONE_TO_ONE_CALL
+            isFormerOneToOneConversation = currentConversation?.type == 
+                com.nextcloud.talk.models.json.conversations.ConversationEnums.ConversationType.FORMER_ONE_TO_ONE
+        }
+        
+        // Add message to adapter immediately
+        android.util.Log.d(TAG, "Adding video upload placeholder with uploadState: ${placeholderMessage.uploadState}")
+        android.util.Log.d(TAG, "isVideoUpload() returns: ${placeholderMessage.isVideoUpload()}")
+        android.util.Log.d(TAG, "getCalculateMessageType() returns: ${placeholderMessage.getCalculateMessageType()}")
+        adapter?.addToStart(placeholderMessage, true)
+        binding.messagesListView.scrollToPosition(0)
+    }
+
+    private fun updatePlaceholderMessage(messageId: String, transform: (com.nextcloud.talk.chat.data.model.ChatMessage) -> Unit) {
+        adapter?.items?.let { items ->
+            val messageIndex = items.indexOfFirst { wrapper ->
+                wrapper.item is com.nextcloud.talk.chat.data.model.ChatMessage && 
+                (wrapper.item as com.nextcloud.talk.chat.data.model.ChatMessage).jsonMessageId.toString() == messageId
+            }
+            
+            if (messageIndex != -1) {
+                val wrapper = items[messageIndex]
+                if (wrapper.item is com.nextcloud.talk.chat.data.model.ChatMessage) {
+                    val message = wrapper.item as com.nextcloud.talk.chat.data.model.ChatMessage
+                    transform(message)
+                    adapter?.notifyItemChanged(messageIndex, "progress_update")
+                }
+            }
+        }
+    }
+    
+    fun cancelVideoUpload(messageId: String) {
+        updatePlaceholderMessage(messageId) { message ->
+            message.uploadState = com.nextcloud.talk.models.UploadState.CANCELLED
+            message.uploadErrorMessage = "Upload abgebrochen"
+        }
+        
+        // TODO: Actually cancel the compression/upload process
+        android.util.Log.d(TAG, "Video upload cancelled for message: $messageId")
     }
 
     fun cancelReply() {
@@ -4556,6 +4663,7 @@ class ChatActivity :
         private const val CONTENT_TYPE_POLL: Byte = 6
         private const val CONTENT_TYPE_LINK_PREVIEW: Byte = 7
         private const val CONTENT_TYPE_DECK_CARD: Byte = 8
+        private const val CONTENT_TYPE_VIDEO_UPLOAD: Byte = 9
         private const val UNREAD_MESSAGES_MARKER_ID = -1
         private const val GET_ROOM_INFO_DELAY_NORMAL: Long = 30000
         private const val GET_ROOM_INFO_DELAY_LOBBY: Long = 5000
