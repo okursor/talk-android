@@ -141,6 +141,12 @@ public interface AppPreferences {
 
     void removeTheme();
 
+    float getFontScale();
+
+    void setFontScale(float value);
+
+    void removeFontScale();
+
     boolean isDbCypherToUpgrade();
 
     void setDbCypherToUpgrade(boolean value);
@@ -186,6 +192,12 @@ public interface AppPreferences {
     void setConversationListPositionAndOffset(int position, int offset);
 
     Pair<Integer, Integer> getConversationListPositionAndOffset();
+
+    String getImageCompressionLevel();
+
+    void setImageCompressionLevel(String level);
+
+    void removeImageCompressionLevel();
 
     void clear();
 }
