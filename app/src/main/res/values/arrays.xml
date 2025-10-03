@@ -80,4 +80,30 @@
         <item>night_yes</item>
     </array>
 
+    <array name="image_compression_level_descriptions">
+        <item>@string/nc_image_compression_none</item>
+        <item>@string/nc_image_compression_light</item>
+        <item>@string/nc_image_compression_medium</item>
+        <item>@string/nc_image_compression_strong</item>
+    </array>
+
+    <array name="image_compression_level_entry_values">
+        <item>none</item>
+        <item>light</item>
+        <item>medium</item>
+        <item>strong</item>
+    </array>
+
+    <array name="font_scale_descriptions">
+        <item>@string/nc_settings_font_scale_normal</item>
+        <item>@string/nc_settings_font_scale_large</item>
+        <item>@string/nc_settings_font_scale_very_large</item>
+    </array>
+
+    <array name="font_scale_values">
+        <item>1.0</item>
+        <item>1.75</item>
+        <item>2.0</item>
+    </array>
+
 </resources>
