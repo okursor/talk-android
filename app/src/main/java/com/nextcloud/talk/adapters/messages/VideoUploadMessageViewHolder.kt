@@ -23,6 +23,10 @@ class VideoUploadMessageViewHolder(
     itemView: View
 ) : MessageHolders.OutcomingTextMessageViewHolder<ChatMessage>(itemView) {
 
+    companion object {
+        private const val TAG = "VideoUploadMessageViewHolder"
+    }
+
     private val thumbnailView: ImageView = itemView.findViewById(R.id.videoThumbnail)
     private val progressOverlay: View = itemView.findViewById(R.id.progressOverlay)
     private val progressBar: ProgressBar = itemView.findViewById(R.id.progressBar)
