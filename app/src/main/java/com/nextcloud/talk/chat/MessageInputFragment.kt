@@ -38,6 +38,7 @@ import android.widget.SeekBar
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.view.ContextThemeWrapper
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
@@ -63,6 +64,7 @@ import com.nextcloud.talk.chat.viewmodels.ChatViewModel
 import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
 import com.nextcloud.talk.data.network.NetworkMonitor
 import com.nextcloud.talk.databinding.FragmentMessageInputBinding
+import com.nextcloud.talk.utils.preferences.AppPreferencesImpl
 import com.nextcloud.talk.jobs.UploadAndShareFilesWorker
 import com.nextcloud.talk.models.json.chat.ChatUtils
 import com.nextcloud.talk.models.json.mention.Mention
@@ -122,6 +124,7 @@ class MessageInputFragment : Fragment() {
     private var xcounter = 0f
     private var ycounter = 0f
     private var collapsed = false
+    // (removed persistent listener flag) layout listeners are now one-shot to avoid races
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,6 +139,99 @@ class MessageInputFragment : Fragment() {
         if (conversationInternalId.isEmpty()) {
             Log.e(TAG, "internalId for conversation passed to MessageInputFragment is empty")
         }
+    }
+
+    // Helper: recompute vertical padding and baseline nudge for the inputEditText.
+    // Call this when text changes (including switching between empty and non-empty)
+    // to prevent the hint from jumping and being clipped.
+    private fun recenterInputField() {
+        try {
+            val input = binding.fragmentMessageInputView.inputEditText ?: return
+            // Only recenter when the input is empty (i.e., hint is visible).
+            val currentText = try { input.text } catch (_: Throwable) { null }
+            if (currentText != null && currentText.isNotEmpty()) return
+
+            // Determine a reliable reference button height to center against:
+            // prefer the measured attachment button or smiley button if available (reflects actual layout),
+            // fallback to base 48dp otherwise.
+            val density = resources.displayMetrics.density
+            val fallbackButtonPx = (48f * density).toInt()
+            val measuredBtn = try { binding.fragmentMessageInputView.attachmentButton.measuredHeight.takeIf { it > 0 } } catch (_: Throwable) { null }
+            val measuredSmiley = try { binding.fragmentMessageInputView.smileyButton.measuredHeight.takeIf { it > 0 } } catch (_: Throwable) { null }
+            val buttonPx = measuredBtn ?: measuredSmiley ?: fallbackButtonPx
+
+            val paint = input.paint
+            val fm = paint.fontMetrics
+            val textHeightPx = kotlin.math.ceil((fm.descent - fm.ascent).toDouble()).toInt()
+            val verticalPad = kotlin.math.max(0, (buttonPx - textHeightPx) / 2)
+
+            try {
+                val curTop = input.paddingTop
+                val curBottom = input.paddingBottom
+                if (kotlin.math.abs(curTop - verticalPad) >= 2 || kotlin.math.abs(curBottom - verticalPad) >= 2) {
+                    input.setPadding(input.paddingLeft, verticalPad, input.paddingRight, verticalPad)
+                }
+            } catch (_: Throwable) {}
+
+            input.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            input.includeFontPadding = false
+
+            // If layout is already available, apply an immediate baseline nudge to align visual center.
+            val layout = try { (input as android.widget.TextView).layout } catch (_: Throwable) { null }
+            if (layout != null && input.height > 0) {
+                try {
+                    val baseline = layout.getLineBaseline(0)
+                    val fm2 = input.paint.fontMetrics
+                    val textCenter = baseline + (fm2.ascent + fm2.descent) / 2f
+                    val viewCenter = input.height / 2f
+                    val delta = kotlin.math.round(viewCenter - textCenter).toInt()
+                    if (kotlin.math.abs(delta) >= 2) {
+                        val minExtra = kotlin.math.max(2, kotlin.math.ceil(kotlin.math.abs(fm2.ascent) * 0.10).toInt())
+                        val half = delta / 2
+                        val remainder = delta - half
+                        val desiredTop = (input.paddingTop + half).coerceAtLeast(minExtra)
+                        val desiredBottom = (input.paddingBottom - remainder).coerceAtLeast(minExtra)
+                        if (kotlin.math.abs(input.paddingTop - desiredTop) >= 2 || kotlin.math.abs(input.paddingBottom - desiredBottom) >= 2) {
+                            input.setPadding(input.paddingLeft, desiredTop, input.paddingRight, desiredBottom)
+                        }
+                    }
+                } catch (_: Throwable) {}
+            } else {
+                // Otherwise attach a one-shot layout listener to run immediately after the next layout pass.
+                try {
+                    val oneShot = object : View.OnLayoutChangeListener {
+                        override fun onLayoutChange(
+                            v: View?, left: Int, top: Int, right: Int, bottom: Int,
+                            oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int
+                        ) {
+                            try {
+                                val edtView = v as? android.widget.TextView ?: return
+                                val layout2 = edtView.layout
+                                if (layout2 != null && edtView.height > 0) {
+                                    val baseline = layout2.getLineBaseline(0)
+                                    val fm2 = edtView.paint.fontMetrics
+                                    val textCenter = baseline + (fm2.ascent + fm2.descent) / 2f
+                                    val viewCenter = edtView.height / 2f
+                                    val delta = kotlin.math.round(viewCenter - textCenter).toInt()
+                                    if (kotlin.math.abs(delta) >= 2) {
+                                        val minExtra = kotlin.math.max(2, kotlin.math.ceil(kotlin.math.abs(fm2.ascent) * 0.10).toInt())
+                                        val half = delta / 2
+                                        val remainder = delta - half
+                                        val desiredTop = (edtView.paddingTop + half).coerceAtLeast(minExtra)
+                                        val desiredBottom = (edtView.paddingBottom - remainder).coerceAtLeast(minExtra)
+                                        if (kotlin.math.abs(edtView.paddingTop - desiredTop) >= 2 || kotlin.math.abs(edtView.paddingBottom - desiredBottom) >= 2) {
+                                            edtView.setPadding(edtView.paddingLeft, desiredTop, edtView.paddingRight, desiredBottom)
+                                        }
+                                    }
+                                }
+                            } catch (_: Throwable) {}
+                            v?.removeOnLayoutChangeListener(this)
+                        }
+                    }
+                    input.addOnLayoutChangeListener(oneShot)
+                } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {}
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
@@ -169,6 +265,246 @@ class MessageInputFragment : Fragment() {
             val threadTitle = text.toString()
             chatActivity.chatViewModel.messageDraft.threadTitle = threadTitle
         }
+
+        // Apply input scaling only to the internal buttons (do not touch the whole view)
+        try {
+                val scale = com.nextcloud.talk.utils.preferences.AppPreferencesImpl(requireContext()).getFontScale()
+                applyMessageInputButtonsScaling(scale)
+        } catch (_: Throwable) {}
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Re-apply scaling only to buttons in case layout/insets changed while fragment was paused
+        try {
+            val scale = try {
+                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(requireContext()).getFontScale()
+            } catch (_: Throwable) {
+                resources.configuration.fontScale
+            }
+            applyMessageInputButtonsScaling(scale)
+        } catch (_: Throwable) {}
+    }
+
+    // Adjust only the ImageButtons inside the MessageInput so the parent view size is untouched
+    private fun applyMessageInputButtonsScaling(fontScale: Float) {
+        try {
+            if (fontScale <= 1.05f) return
+
+            // base sizes (dp) — compute final size from user preference multiplier
+            val baseButtonDp = 48f
+            val baseIconDp = 24f
+            val minIconDp = 16f
+            val maxIconDp = 32f
+
+            // Use the numeric fontScale preference (passed in) as multiplier.
+            // Clamp to reasonable bounds to avoid extreme sizes (1.0..2.0)
+            val sizeMultiplier = kotlin.math.max(1.0f, kotlin.math.min(fontScale, 2.0f))
+
+            val targetButtonDp = baseButtonDp * sizeMultiplier
+            val targetIconDp = baseIconDp * sizeMultiplier
+
+            val targetIconClampedDp = kotlin.math.max(minIconDp * sizeMultiplier, kotlin.math.min(targetIconDp, maxIconDp * sizeMultiplier))
+            val density = resources.displayMetrics.density
+            val buttonPx = (targetButtonDp * density).toInt()
+            val iconPx = (targetIconClampedDp * density).toInt()
+            val pad = kotlin.math.max(0, (buttonPx - iconPx) / 2)
+
+            val btns = listOfNotNull(
+                runCatching { binding.fragmentMessageInputView.attachmentButton }.getOrNull(),
+                runCatching { binding.fragmentMessageInputView.smileyButton }.getOrNull(),
+                runCatching { binding.fragmentMessageInputView.messageSendButton }.getOrNull(),
+                runCatching { binding.fragmentMessageInputView.recordAudioButton }.getOrNull(),
+                runCatching { binding.fragmentMessageInputView.submitThreadButton }.getOrNull(),
+                runCatching { binding.fragmentMessageInputView.editMessageButton }.getOrNull()
+            )
+
+            Log.d("MessageInputFrag", "applyMessageInputButtonsScaling: multiplier=$sizeMultiplier fontScale=$fontScale, buttonPx=$buttonPx, iconPx=$iconPx, pad=$pad")
+            btns.forEach { btn ->
+                try {
+                    if (btn is ImageView) {
+                        btn.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                        btn.setPadding(pad, pad, pad, pad)
+                        try {
+                            val iconDrawable = btn.drawable
+                            if (iconDrawable != null) {
+                                // replace with a bitmap of the desired icon size so intrinsic size increases
+                                val bmp = iconDrawable.toBitmap(iconPx, iconPx)
+                                btn.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, bmp))
+                            }
+                        } catch (_: Throwable) {}
+                        // Ensure the ImageView does not resize its bounds to the drawable
+                        try {
+                            btn.adjustViewBounds = false
+                            val lp = btn.layoutParams
+                            if (lp != null) {
+                                lp.width = buttonPx
+                                lp.height = buttonPx
+                                btn.layoutParams = lp
+                                // also set minimums to avoid future measure increases
+                                try { btn.minimumWidth = buttonPx; btn.minimumHeight = buttonPx } catch (_: Throwable) {}
+                                Log.d("MessageInputFrag", "applied lp to btn desc='${btn.contentDescription}' resId='${btn.id}' -> width=${lp.width} height=${lp.height}")
+                                // post a runnable to log actual measured size after layout
+                                btn.post {
+                                    try {
+                                        Log.d("MessageInputFrag", "btn measured: desc='${btn.contentDescription}' id=${btn.id} measuredW=${btn.measuredWidth} measuredH=${btn.measuredHeight} layoutW=${btn.width} layoutH=${btn.height}")
+                                    } catch (_: Throwable) {}
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    } else {
+                        try { btn.setPadding(pad, pad, pad, pad) } catch (_: Throwable) {}
+                    }
+                    // do not change layoutParams of parent; keep parent measured size
+                } catch (_: Throwable) {}
+            }
+            // after applying sizes, log parent and key children measured/layout sizes
+            try {
+                binding.fragmentMessageInputView.post {
+                    try {
+                        val parent = binding.fragmentMessageInputView
+                        Log.d("MessageInputFrag", "parent measured: measuredW=${parent.measuredWidth} measuredH=${parent.measuredHeight} layoutW=${parent.width} layoutH=${parent.height}")
+                        val children = listOf(
+                            binding.fragmentMessageInputView.attachmentButton,
+                            binding.fragmentMessageInputView.smileyButton,
+                            binding.fragmentMessageInputView.messageSendButton,
+                            binding.fragmentMessageInputView.recordAudioButton,
+                            binding.fragmentMessageInputView.submitThreadButton,
+                            binding.fragmentMessageInputView.editMessageButton,
+                            binding.fragmentMessageInputView.inputEditText
+                        )
+                        children.forEach { c ->
+                            try {
+                                val resName = try { resources.getResourceEntryName(c.id) } catch (_: Throwable) { "no-name" }
+                                Log.d("MessageInputFrag", "child id=${c.id} name=$resName vis=${c.visibility} measuredW=${c.measuredWidth} measuredH=${c.measuredHeight} layoutW=${c.width} layoutH=${c.height}")
+                            } catch (_: Throwable) {}
+                        }
+                        // Scale the EditText together with buttons: adjust text size, minHeight and height
+                        try {
+                            val input = binding.fragmentMessageInputView.inputEditText
+                            // Scale the text moderately: we only apply a fraction of the button multiplier
+                            // so the text grows but not as aggressively as the full fontScale.
+                            val baseTextSpId = R.dimen.chat_text_size
+                            val baseTextPx = resources.getDimension(baseTextSpId) // px using scaledDensity
+                            val baseSp = baseTextPx / resources.displayMetrics.scaledDensity
+                            // textScale: linear interpolation between 1.0 and 1.0 + 0.5*(sizeMultiplier-1)
+                            val textScale = 1.0f + (sizeMultiplier - 1.0f) * 0.5f
+                            val desiredSp = baseSp * textScale
+                            val desiredPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, desiredSp, resources.displayMetrics)
+                            input.setTextSize(TypedValue.COMPLEX_UNIT_PX, desiredPx)
+
+                            // ensure minimum and single-line height matches button size; allow wrap for multiline
+                            try { input.minHeight = buttonPx } catch (_: Throwable) {}
+                            try {
+                                val lp = input.layoutParams
+                                if (lp != null) {
+                                    val lineCount = try { input.lineCount } catch (_: Throwable) { 1 }
+                                    if (lineCount <= 1) {
+                                        lp.height = buttonPx
+                                        try { input.setLines(1); input.maxLines = 1 } catch (_: Throwable) {}
+                                        try { input.setHeight(buttonPx); input.minHeight = buttonPx } catch (_: Throwable) {}
+                                        Log.d("MessageInputFrag", "input single-line: enforcing height=$buttonPx via lp+setHeight+maxLines")
+                                    } else {
+                                        lp.height = ViewGroup.LayoutParams.WRAP_CONTENT
+                                        try { input.maxLines = Integer.MAX_VALUE } catch (_: Throwable) {}
+                                        Log.d("MessageInputFrag", "input multiline (lines=$lineCount): allow wrap_content")
+                                    }
+                                    input.layoutParams = lp
+                                }
+                            } catch (_: Throwable) {}
+
+                            // center text vertically: compute font metrics and add symmetric padding so the
+                                // center text and hint vertically inside the target button height
+                                try {
+                                    // compute font metrics-based text height
+                                    val paint = input.paint
+                                    val fm = paint.fontMetrics
+                                    val textHeightPx = kotlin.math.ceil((fm.descent - fm.ascent).toDouble()).toInt()
+                                    // compute vertical padding needed to center text within buttonPx
+                                    val verticalPad = kotlin.math.max(0, (buttonPx - textHeightPx) / 2)
+                                    // apply symmetric vertical padding so both text and hint align
+                                    input.setPadding(input.paddingLeft, verticalPad, input.paddingRight, verticalPad)
+                                    input.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                                    input.includeFontPadding = false
+                                    Log.d("MessageInputFrag", "input centering: textH=$textHeightPx buttonH=$buttonPx pad=$verticalPad")
+                            } catch (_: Throwable) {}
+
+                            // Keep background as-is to preserve drawable insets which prevent glyph clipping
+
+                            // force a layout pass so the changes take effect immediately
+                            try {
+                                input.invalidate(); input.requestLayout()
+                                try { binding.fragmentMessageInputView.invalidate(); binding.fragmentMessageInputView.requestLayout() } catch (_: Throwable) {}
+                            } catch (_: Throwable) {}
+
+                            // Post-check after the next layout pass using a one-shot listener (deterministic).
+                            try {
+                                val oneShotLayout = object : View.OnLayoutChangeListener {
+                                    override fun onLayoutChange(
+                                        v: View?, left: Int, top: Int, right: Int, bottom: Int,
+                                        oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int
+                                    ) {
+                                        try {
+                                            try {
+                                                Log.d("MessageInputFrag", "post-check input padding top=${input.paddingTop} bottom=${input.paddingBottom} measuredH=${input.measuredHeight} layoutH=${input.height} lineCount=${input.lineCount} textPx=${desiredPx}")
+                                            } catch (_: Throwable) {}
+
+                                            try {
+                                                val edt = input
+                                                val layout2 = (edt as android.widget.TextView).layout
+                                                if (layout2 != null && edt.height > 0) {
+                                                    val baseline = layout2.getLineBaseline(0)
+                                                    val fm2 = edt.paint.fontMetrics
+                                                    val textCenter = baseline + (fm2.ascent + fm2.descent) / 2f
+                                                    val viewCenter = edt.height / 2f
+                                                    val delta = kotlin.math.round(viewCenter - textCenter).toInt()
+                                                    if (kotlin.math.abs(delta) >= 2) {
+                                                        val minExtra = kotlin.math.max(2, kotlin.math.ceil(kotlin.math.abs(fm2.ascent) * 0.10).toInt())
+                                                        val half = delta / 2
+                                                        val remainder = delta - half
+                                                        val newTop = (edt.paddingTop + half).coerceAtLeast(minExtra)
+                                                        val newBottom = (edt.paddingBottom - remainder).coerceAtLeast(minExtra)
+                                                        if (kotlin.math.abs(edt.paddingTop - newTop) >= 2 || kotlin.math.abs(edt.paddingBottom - newBottom) >= 2) {
+                                                            edt.setPadding(edt.paddingLeft, newTop, edt.paddingRight, newBottom)
+                                                            edt.invalidate(); edt.requestLayout()
+                                                        }
+                                                        Log.d("MessageInputFrag", "baseline adjust: baseline=$baseline textCenter=$textCenter viewCenter=$viewCenter delta=$delta newPadTop=${newTop} newPadBottom=${newBottom} minExtra=${minExtra}")
+                                                    }
+                                                }
+                                            } catch (_: Throwable) {}
+
+                                            try {
+                                                val parent = binding.fragmentMessageInputView
+                                                Log.d("MessageInputFrag", "post-check parent measured: measuredW=${parent.measuredWidth} measuredH=${parent.measuredHeight} layoutW=${parent.width} layoutH=${parent.height}")
+                                                val children = listOf(
+                                                    binding.fragmentMessageInputView.attachmentButton,
+                                                    binding.fragmentMessageInputView.smileyButton,
+                                                    binding.fragmentMessageInputView.messageSendButton,
+                                                    binding.fragmentMessageInputView.recordAudioButton,
+                                                    binding.fragmentMessageInputView.submitThreadButton,
+                                                    binding.fragmentMessageInputView.editMessageButton,
+                                                    binding.fragmentMessageInputView.inputEditText
+                                                )
+                                                children.forEach { c ->
+                                                    try {
+                                                        val resName = try { resources.getResourceEntryName(c.id) } catch (_: Throwable) { "no-name" }
+                                                        Log.d("MessageInputFrag", "post-check child id=${c.id} name=$resName vis=${c.visibility} measuredW=${c.measuredWidth} measuredH=${c.measuredHeight} layoutW=${c.width} layoutH=${c.height}")
+                                                    } catch (_: Throwable) {}
+                                                }
+                                            } catch (_: Throwable) {}
+                                        } catch (_: Throwable) {}
+                                        v?.removeOnLayoutChangeListener(this)
+                                    }
+                                }
+                                input.addOnLayoutChangeListener(oneShotLayout)
+                            } catch (_: Throwable) {}
+
+                            Log.d("MessageInputFrag", "scaled input text: baseSp=$baseSp textScale=$textScale desiredSp=$desiredSp desiredPx=$desiredPx enforcedH=$buttonPx minH=${input.minHeight}")
+                        } catch (_: Throwable) {}
+                    } catch (_: Throwable) {}
+                }
+            } catch (_: Throwable) {}
+        } catch (_: Throwable) {}
     }
 
     private fun initObservers() {
@@ -408,6 +744,10 @@ class MessageInputFragment : Fragment() {
                 chatActivity.chatViewModel.messageDraft.messageCursor = cursor
                 chatActivity.chatViewModel.messageDraft.messageText = text
                 handleButtonsVisibility()
+                // Recenter the input field every time text changes to avoid hint jumping
+                try {
+                    recenterInputField()
+                } catch (_: Throwable) {}
             }
         })
 
@@ -644,6 +984,35 @@ class MessageInputFragment : Fragment() {
         val threadTitleContainsText = binding.fragmentCreateThreadView.createThreadInput.text?.isNotEmpty() ?: false
 
         binding.fragmentMessageInputView.apply {
+            try {
+                // Work with the actual EditText view (avoid private/internal names on MessageInput wrapper)
+                val input = inputEditText
+                // determine a reasonable button height to center against: prefer measured attachment button height
+                val buttonPx = try {
+                    attachmentButton.measuredHeight.takeIf { it > 0 } ?: (48 * resources.displayMetrics.density).toInt()
+                } catch (_: Throwable) {
+                    (48 * resources.displayMetrics.density).toInt()
+                }
+
+                // remove extra font padding so FontMetrics are consistent for text and hint
+                input?.let { edt ->
+                    edt.includeFontPadding = false
+                    // compute font metrics-based text height using ascent/descent to match hint/typed text
+                    val paint = edt.paint
+                    val fm = paint.fontMetrics
+                    val textHeightPx = kotlin.math.ceil((fm.descent - fm.ascent).toDouble()).toInt()
+                    // compute vertical padding needed to center text/hint within buttonPx
+                    val verticalPad = kotlin.math.max(0, (buttonPx - textHeightPx) / 2)
+                    // apply symmetric vertical padding so both text and hint align
+                    edt.setPadding(edt.paddingLeft, verticalPad, edt.paddingRight, verticalPad)
+                    edt.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                    Log.d("MessageInputFrag", "computed input vPad=$verticalPad textH=$textHeightPx buttonH=$buttonPx fm.top=${fm.top} fm.bottom=${fm.bottom} fm.ascent=${fm.ascent} fm.descent=${fm.descent}")
+                }
+                try { input?.setLineSpacing(0f, 1.0f) } catch (_: Throwable) {}
+                try { input?.invalidate(); input?.requestLayout() } catch (_: Throwable) {}
+            } catch (_: Throwable) {}
+
+            // control visibility of buttons depending on current mode/state
             when {
                 isEditModeActive -> {
                     messageSendButton.setVisible(false)
@@ -657,13 +1026,11 @@ class MessageInputFragment : Fragment() {
                     recordAudioButton.setVisible(false)
                     attachmentButton.setVisible(false)
                     submitThreadButton.setVisible(true)
-                    if (inputContainsText && threadTitleContainsText) {
-                        submitThreadButton.isEnabled = true
-                        submitThreadButton.alpha = FULLY_OPAQUE
-                    } else {
-                        submitThreadButton.isEnabled = false
-                        submitThreadButton.alpha = OPACITY_DISABLED
-                    }
+                }
+
+                inputContainsText && threadTitleContainsText -> {
+                    submitThreadButton.isEnabled = true
+                    submitThreadButton.alpha = FULLY_OPAQUE
                 }
 
                 inputContainsText -> {
@@ -1010,6 +1377,24 @@ class MessageInputFragment : Fragment() {
         binding.fragmentMessageInputView.attachmentButton.visibility = View.VISIBLE
         chatActivity.messageInputViewModel.edit(null)
         handleButtonsVisibility()
+        // After programmatic clears and visibility changes, ensure the input is recentered once
+        // after the layout stabilizes. Use post + a one-shot layout listener to be robust across devices.
+        try {
+            val inputView = binding.fragmentMessageInputView.inputEditText
+            inputView?.post {
+                try { recenterInputField() } catch (_: Throwable) {}
+            }
+            // one-shot guard: ensure recenter after the next layout pass (covers visibility/measure changes)
+            try {
+                val oneShot = object : View.OnLayoutChangeListener {
+                    override fun onLayoutChange(v: View?, left: Int, top: Int, right: Int, bottom: Int, oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int) {
+                        try { recenterInputField() } catch (_: Throwable) {}
+                        v?.removeOnLayoutChangeListener(this)
+                    }
+                }
+                binding.fragmentMessageInputView.addOnLayoutChangeListener(oneShot)
+            } catch (_: Throwable) {}
+        } catch (_: Throwable) {}
     }
 
     private fun themeMessageInputView() {
