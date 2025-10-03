@@ -87,5 +87,6 @@ freeline_project_description.json
 # python
 **/__pycache__/
 
-/gradle/verification-keyring.gpg
-/app/src/main/assets/selfie_segmenter.tflite
+# Development tools and documentation
+.specstory/
+.vscode/
