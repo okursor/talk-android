@@ -65,6 +65,7 @@ import com.nextcloud.talk.jobs.ContactAddressBookWorker
 import com.nextcloud.talk.jobs.ContactAddressBookWorker.Companion.checkPermission
 import com.nextcloud.talk.jobs.ContactAddressBookWorker.Companion.deleteAll
 import com.nextcloud.talk.models.ImageCompressionLevel
+import com.nextcloud.talk.models.VideoCompressionLevel
 import com.nextcloud.talk.models.json.generic.GenericOverall
 import com.nextcloud.talk.models.json.userprofile.UserProfileOverall
 import com.nextcloud.talk.profile.ProfileActivity
@@ -85,6 +86,8 @@ import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_SCROLL_TO_NOTIFICATION_CAT
 import com.nextcloud.talk.utils.permissions.PlatformPermissionUtil
 import com.nextcloud.talk.utils.power.PowerManagerUtils
 import com.nextcloud.talk.utils.preferences.AppPreferencesImpl
+import com.nextcloud.talk.utils.preferences.imageCompressionLevel
+import com.nextcloud.talk.utils.preferences.videoCompressionLevel
 import com.nextcloud.talk.utils.singletons.ApplicationWideMessageHolder
 import io.reactivex.Observer
 import io.reactivex.android.schedulers.AndroidSchedulers
@@ -195,6 +198,7 @@ class SettingsActivity :
 
         setupCheckables()
         setupImageCompressionSettings()
+        setupVideoCompressionSettings()
         setupScreenLockSetting()
         setupNotificationSettings()
         setupProxyTypeSettings()
@@ -1101,6 +1105,48 @@ class SettingsActivity :
             ImageCompressionLevel.STRONG -> R.string.nc_image_compression_strong_description
         }
         binding.settingsImageCompressionLevelDescription.setText(descriptionResId)
+    }
+
+    private fun setupVideoCompressionSettings() {
+        // Get current compression level from preferences
+        val currentLevelKey = appPreferences.videoCompressionLevel
+        val currentLevel = VideoCompressionLevel.fromKey(currentLevelKey)
+
+        // Set current selection in dropdown
+        val position = resources.getStringArray(R.array.video_compression_level_entry_values).indexOf(currentLevel.key)
+        if (position >= 0) {
+            binding.settingsVideoCompressionLevelDropdown.setText(
+                resources.getStringArray(R.array.video_compression_level_descriptions)[position]
+            )
+            updateVideoCompressionDescription(currentLevel)
+        }
+
+        // Set dropdown items
+        binding.settingsVideoCompressionLevelDropdown.setSimpleItems(R.array.video_compression_level_descriptions)
+
+        // Handle dropdown selection changes
+        binding.settingsVideoCompressionLevelDropdown.setOnItemClickListener { _, _, position, _ ->
+            val selectedKey = resources.getStringArray(R.array.video_compression_level_entry_values)[position]
+            val selectedLevel = VideoCompressionLevel.fromKey(selectedKey)
+
+            // Save the selection
+            appPreferences.videoCompressionLevel = selectedKey
+
+            // Update the description text
+            updateVideoCompressionDescription(selectedLevel)
+
+            Log.d(TAG, "Video compression level changed to: ${selectedLevel.name}")
+        }
+    }
+
+    private fun updateVideoCompressionDescription(level: VideoCompressionLevel) {
+        val descriptionResId = when (level) {
+            VideoCompressionLevel.NONE -> R.string.nc_video_compression_none_description
+            VideoCompressionLevel.LIGHT -> R.string.nc_video_compression_light_description
+            VideoCompressionLevel.MEDIUM -> R.string.nc_video_compression_medium_description
+            VideoCompressionLevel.STRONG -> R.string.nc_video_compression_strong_description
+        }
+        binding.settingsVideoCompressionLevelDescription.setText(descriptionResId)
     }
 
     public override fun onDestroy() {
