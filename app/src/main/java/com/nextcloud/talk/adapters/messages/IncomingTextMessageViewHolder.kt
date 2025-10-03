@@ -100,7 +100,15 @@ class IncomingTextMessageViewHolder(itemView: View, payload: Any) :
 
     @Suppress("LongMethod")
     private fun processMessage(message: ChatMessage, hasCheckboxes: Boolean) {
-        var textSize = context.resources!!.getDimension(R.dimen.chat_text_size)
+        // base text size in pixels from resources (dimens defined in sp)
+        var baseTextPx = context.resources!!.getDimension(R.dimen.chat_text_size)
+        // apply app fontScale if available, fallback to system font scale
+        val fontScale = try {
+            appPreferences.getFontScale()
+        } catch (_: Throwable) {
+            context.resources.configuration.fontScale
+        }
+        var textSize = baseTextPx * fontScale
         if (!hasCheckboxes) {
             binding.messageText.visibility = View.VISIBLE
             binding.checkboxContainer.visibility = View.GONE
