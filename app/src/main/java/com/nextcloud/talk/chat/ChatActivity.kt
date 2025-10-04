@@ -32,6 +32,7 @@ import android.os.Build
 import android.util.Size
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
@@ -272,6 +273,18 @@ class ChatActivity :
     var active = false
 
     private lateinit var binding: ActivityChatBinding
+    
+    // Mapping uniqueKey (filename_uploadTag) -> (placeholderId, timestamp) für Placeholder-Ersatz
+    private val uploadPlaceholderByKey: MutableMap<String, Pair<String, Long>> = mutableMapOf()
+    
+    // Handler für periodischen Cleanup abgelaufener Placeholders
+    private val cleanupHandler = Handler(Looper.getMainLooper())
+    private val cleanupRunnable = object : Runnable {
+        override fun run() {
+            cleanupExpiredPlaceholders()
+            cleanupHandler.postDelayed(this, 2 * 60 * 1000L) // Alle 2 Minuten
+        }
+    }
 
     @Inject
     lateinit var ncApi: NcApi
@@ -1422,6 +1435,9 @@ class ChatActivity :
         actionBar?.show()
 
         setupSwipeToReply()
+        
+        // ✅ Starte periodischen Cleanup-Handler
+        cleanupHandler.postDelayed(cleanupRunnable, 2 * 60 * 1000L)
 
         binding.unreadMessagesPopup.setOnClickListener {
             binding.messagesListView.smoothScrollToPosition(0)
@@ -2744,6 +2760,11 @@ class ChatActivity :
         if (mentionAutocomplete != null && mentionAutocomplete!!.isPopupShowing) {
             mentionAutocomplete?.dismissPopup()
         }
+        
+        // ✅ Stoppe periodischen Handler und führe finalen Cleanup durch
+        cleanupHandler.removeCallbacks(cleanupRunnable)
+        cleanupExpiredPlaceholders()
+        
         adapter = null
     }
 
@@ -3061,7 +3082,11 @@ class ChatActivity :
                 chatMessage.isFormerOneToOneConversation =
                     (currentConversation?.type == ConversationEnums.ConversationType.FORMER_ONE_TO_ONE)
                 Log.d(TAG, "chatMessage to add:" + chatMessage.message)
-                it.addToStart(chatMessage, scrollToBottom)
+                
+                // ✅ NEU: Versuche Placeholder zu ersetzen statt neue Message hinzuzufügen
+                if (!tryReplacePlaceholderWithServerMessage(chatMessage)) {
+                    it.addToStart(chatMessage, scrollToBottom)
+                }
             }
         }
 
@@ -3112,7 +3137,12 @@ class ChatActivity :
         }
 
         if (adapter != null) {
-            adapter?.addToEnd(chatMessageList, false)
+            // ✅ NEU: Auch hier Replace versuchen vor addToEnd
+            for (message in chatMessageList) {
+                if (!tryReplacePlaceholderWithServerMessage(message)) {
+                    adapter?.addToEnd(listOf(message), false)
+                }
+            }
         }
         scrollToRequestedMessageIfNeeded()
     }
@@ -4570,6 +4600,91 @@ class ChatActivity :
     }
 
     /**
+     * Versucht einen Upload-Placeholder mit der Server-Message zu ersetzen.
+     * Matching erfolgt über Dateinamen (selectedIndividualHashMap["name"]).
+     * Versucht zuerst exact match mit uploadTag, dann Fallback auf nur Filename.
+     * 
+     * @return true wenn Placeholder gefunden und ersetzt wurde, false sonst
+     */
+    private fun tryReplacePlaceholderWithServerMessage(serverMessage: ChatMessage): Boolean {
+        // Server-Message muss ein File-Attachment haben
+        val filename = serverMessage.selectedIndividualHashMap?.get("name") ?: return false
+        
+        // Versuche zuerst alle Keys mit diesem Filename zu finden
+        // (kann mehrere sein bei gleichzeitigen Uploads derselben Datei)
+        val matchingKeys = uploadPlaceholderByKey.keys.filter { it.startsWith(filename + "_") }
+        
+        // Nehme den ältesten Match (FIFO)
+        val keyToUse = matchingKeys.minByOrNull { key ->
+            uploadPlaceholderByKey[key]?.second ?: Long.MAX_VALUE
+        }
+        
+        if (keyToUse == null) {
+            Log.d(TAG, "⚠️ No placeholder mapping found for filename=$filename")
+            return false
+        }
+        
+        // Entferne aus Map und hole Placeholder-Info
+        val placeholderInfo = uploadPlaceholderByKey.remove(keyToUse) ?: return false
+        val (placeholderId, _) = placeholderInfo
+        
+        // Finde Position im Adapter
+        val messageIndex = adapter?.items?.indexOfFirst { wrapper ->
+            wrapper.item is ChatMessage && 
+            (wrapper.item as ChatMessage).jsonMessageId.toString() == placeholderId
+        } ?: -1
+        
+        if (messageIndex >= 0) {
+            // ✅ IN-PLACE REPLACEMENT: Position bleibt identisch!
+            Log.d(TAG, "✅ Replacing placeholder at index $messageIndex (id=$placeholderId) with server message (id=${serverMessage.id}, filename=$filename)")
+            
+            // Setze notwendige Eigenschaften für die Server-Message
+            serverMessage.activeUser = conversationUser
+            serverMessage.isOneToOneConversation = 
+                currentConversation?.type == ConversationEnums.ConversationType.ROOM_TYPE_ONE_TO_ONE_CALL
+            serverMessage.isFormerOneToOneConversation = 
+                currentConversation?.type == ConversationEnums.ConversationType.FORMER_ONE_TO_ONE
+            
+            // Ersetze das Item im Adapter
+            adapter?.items?.get(messageIndex)?.item = serverMessage
+            adapter?.notifyItemChanged(messageIndex)
+            
+            return true
+        } else {
+            Log.w(TAG, "⚠️ Placeholder id=$placeholderId not found in adapter for key=$keyToUse")
+        }
+        
+        return false
+    }
+    
+    /**
+     * Prüft und entfernt abgelaufene Placeholder (wenn Server-Message nach Timeout nicht eintraf).
+     * Wird periodisch aufgerufen (alle 2 Minuten).
+     */
+    private fun cleanupExpiredPlaceholders() {
+        val now = System.currentTimeMillis()
+        val timeout = 10 * 60 * 1000L // 10 Minuten
+        
+        val expiredEntries = uploadPlaceholderByKey.filter { (_, info) ->
+            val (_, timestamp) = info
+            now - timestamp > timeout
+        }
+        
+        for ((key, info) in expiredEntries) {
+            val (placeholderId, _) = info
+            Log.w(TAG, "⏰ Placeholder timeout for key=$key, id=$placeholderId")
+            
+            // Markiere Placeholder als Fehler statt zu löschen (damit User sieht was passiert ist)
+            updatePlaceholderMessage(placeholderId) { message ->
+                message.uploadState = com.nextcloud.talk.models.UploadState.FAILED
+                message.uploadErrorMessage = "Upload abgeschlossen, aber Nachricht vom Server nicht empfangen"
+            }
+            
+            uploadPlaceholderByKey.remove(key)
+        }
+    }
+
+    /**
      * Prefetch and cache video thumbnail BEFORE transcoding starts.
      * This avoids race conditions with the transcoder accessing the same file.
      */
@@ -4688,6 +4803,21 @@ class ChatActivity :
         android.util.Log.d(TAG, "   isVideoUpload(): ${placeholderMessage.isVideoUpload()}")
         android.util.Log.d(TAG, "   getCalculateMessageType(): ${placeholderMessage.getCalculateMessageType()}")
         
+        // ✅ Speichere Mapping (filename_uploadTag) -> (placeholderId, timestamp) für späteren Ersatz
+        // Robustes Key-Matching: filename + unique uploadTag für mehrere parallele Uploads derselben Datei
+        try {
+            val filename = com.nextcloud.talk.utils.FileUtils.getFileName(videoUri, this)
+            val placeholderId = placeholderMessage.jsonMessageId.toString()
+            val timestamp = System.currentTimeMillis()
+            val uploadTag = "upload_$fileUri"
+            val uniqueKey = "${filename}_${uploadTag.hashCode()}" // Eindeutiger Key
+            
+            uploadPlaceholderByKey[uniqueKey] = Pair(placeholderId, timestamp)
+            android.util.Log.d(TAG, "📎 Mapped placeholder: key=$uniqueKey -> id=$placeholderId")
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "⚠️ Could not map placeholder filename", e)
+        }
+        
         // Add message to adapter - hasContentFor() will be called here
         adapter?.addToStart(placeholderMessage, true)
         binding.messagesListView.scrollToPosition(0)
@@ -4790,16 +4920,36 @@ class ChatActivity :
             }
             
             if (messageIndex != -1) {
-                // First, mark as completed so user sees success state briefly
-                updatePlaceholderMessage(messageId) { message ->
-                    message.uploadState = com.nextcloud.talk.models.UploadState.COMPLETED
+                val message = items[messageIndex].item as com.nextcloud.talk.chat.data.model.ChatMessage
+                
+                // ✅ Cleanup Mapping wenn Placeholder entfernt wird
+                // Entferne alle Keys die zu diesem Placeholder gehören
+                message.localVideoUri?.let { uri ->
+                    try {
+                        val filename = com.nextcloud.talk.utils.FileUtils.getFileName(uri, this)
+                        val keysToRemove = uploadPlaceholderByKey.keys.filter { 
+                            it.startsWith(filename + "_") && 
+                            uploadPlaceholderByKey[it]?.first == messageId 
+                        }
+                        keysToRemove.forEach { key ->
+                            uploadPlaceholderByKey.remove(key)
+                            android.util.Log.d(TAG, "🧹 Removed placeholder mapping for key=$key")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w(TAG, "Could not cleanup placeholder mapping", e)
+                    }
                 }
                 
-                // Remove after a short delay to show completion
+                // First, mark as completed so user sees success state briefly
+                updatePlaceholderMessage(messageId) { msg ->
+                    msg.uploadState = com.nextcloud.talk.models.UploadState.COMPLETED
+                }
+                
+                // ✅ Kürzere Delay für schnellere UX (0.5s statt 1.5s)
                 binding.messagesListView.postDelayed({
                     android.util.Log.d(TAG, "Removing video upload placeholder at index: $messageIndex")
                     adapter?.deleteById(messageId)
-                }, 1500) // 1.5 seconds delay
+                }, 500) // 0.5 seconds delay
             }
         }
     }
