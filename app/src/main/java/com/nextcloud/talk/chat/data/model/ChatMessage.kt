@@ -224,8 +224,25 @@ data class ChatMessage(
     }
 
     fun isVideoUpload(): Boolean {
-        val result = uploadState != null && uploadState != UploadState.NONE
-        return result
+        // Only treat as video upload when there's an active upload state
+        // AND we either have a localVideoUri (it's an outgoing video) or
+        // the messageParameters contain a file entry with a video mime type.
+        if (uploadState == UploadState.NONE) return false
+
+        if (localVideoUri != null) return true
+
+        if (messageParameters != null && messageParameters!!.size > 0) {
+            for ((_, individualHashMap) in messageParameters!!) {
+                if (isHashMapEntryEqualTo(individualHashMap, "type", "file")) {
+                    val mime = individualHashMap["mime"]
+                    if (!mime.isNullOrEmpty() && mime.startsWith("video")) {
+                        return true
+                    }
+                }
+            }
+        }
+
+        return false
     }
 
     @Suppress("ReturnCount")

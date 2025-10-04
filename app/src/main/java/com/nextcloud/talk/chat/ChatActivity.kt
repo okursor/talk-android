@@ -23,10 +23,13 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
 import android.database.Cursor
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.location.LocationManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.util.Size
 import android.os.Bundle
 import android.os.Handler
 import android.provider.ContactsContract
@@ -198,6 +201,7 @@ import com.nextcloud.talk.utils.Mimetype
 import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.ParticipantPermissions
 import com.nextcloud.talk.utils.SpreedFeatures
+import com.nextcloud.talk.utils.ThumbnailCache
 import com.nextcloud.talk.utils.VibrationUtils
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_VOICE_ONLY
@@ -4565,6 +4569,63 @@ class ChatActivity :
         cancelReply()
     }
 
+    /**
+     * Prefetch and cache video thumbnail BEFORE transcoding starts.
+     * This avoids race conditions with the transcoder accessing the same file.
+     */
+    private fun prefetchVideoThumbnail(videoUri: Uri) {
+        val key = videoUri.toString()
+        
+        // Already cached?
+        if (ThumbnailCache.get(key) != null) {
+            Log.d(TAG, "Thumbnail already cached for $key")
+            return
+        }
+
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            var thumbnail: Bitmap? = null
+            
+            try {
+                // Try MediaStore thumbnail API (fast, uses provider-optimized thumbnails)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        thumbnail = contentResolver.loadThumbnail(videoUri, Size(320, 180), null)
+                        Log.d(TAG, "✅ Loaded MediaStore thumbnail for $key")
+                    } catch (e: Exception) {
+                        Log.d(TAG, "MediaStore thumbnail not available, falling back to extraction", e)
+                    }
+                }
+                
+                // Fallback: extract frame with MediaMetadataRetriever
+                if (thumbnail == null) {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(this@ChatActivity, videoUri)
+                        thumbnail = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        Log.d(TAG, "✅ Extracted thumbnail via MediaMetadataRetriever for $key")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to extract thumbnail", e)
+                    } finally {
+                        try {
+                            retriever.release()
+                        } catch (_: Exception) {}
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Thumbnail prefetch failed for $key", e)
+            }
+            
+            // Cache the thumbnail if we got one
+            if (thumbnail != null) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    ThumbnailCache.put(key, thumbnail)
+                    Log.d(TAG, "📦 Cached thumbnail for $key")
+                }
+            }
+        }
+    }
+
+
     private fun createVideoUploadPlaceholder(
         fileUri: String,
         caption: String = "",
@@ -4573,6 +4634,9 @@ class ChatActivity :
         displayName: String
     ) {
         val videoUri = android.net.Uri.parse(fileUri)
+        
+        // ✅ PREFETCH THUMBNAIL FIRST (before transcoding starts!)
+        prefetchVideoThumbnail(videoUri)
         
         // Create placeholder message immediately with ALL required properties
         val placeholderMessage = com.nextcloud.talk.chat.data.model.ChatMessage().apply {

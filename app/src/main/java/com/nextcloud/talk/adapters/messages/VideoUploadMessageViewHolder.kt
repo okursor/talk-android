@@ -17,6 +17,7 @@ import com.nextcloud.talk.chat.ChatActivity
 import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.models.UploadState
 import com.nextcloud.talk.models.domain.ConversationModel
+import com.nextcloud.talk.utils.ThumbnailCache
 import com.stfalcon.chatkit.messages.MessageHolders
 
 class VideoUploadMessageViewHolder(
@@ -38,6 +39,14 @@ class VideoUploadMessageViewHolder(
     private val messageText: TextView = itemView.findViewById(R.id.messageText)
     
     private var commonMessageInterface: CommonMessageInterface? = null
+
+    /**
+     * Called when the ViewHolder is recycled.
+     * No async work to cancel since we only read from cache now.
+     */
+    fun onRecycled() {
+        // Nothing to cancel - we only read from ThumbnailCache synchronously
+    }
 
     fun assignCommonMessageInterface(commonMessageInterface: CommonMessageInterface) {
         this.commonMessageInterface = commonMessageInterface
@@ -71,9 +80,6 @@ class VideoUploadMessageViewHolder(
     }
 
     private fun bindVideoUpload(message: ChatMessage) {
-        // Basis-Setup
-        thumbnailView.setImageResource(R.drawable.ic_mimetype_video)
-        
         // Zeit anzeigen
         timeText.text = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(message.timestamp))
         
@@ -92,6 +98,29 @@ class VideoUploadMessageViewHolder(
             (itemView.context as? ChatActivity)?.let { chatActivity ->
                 chatActivity.cancelVideoUpload(message.jsonMessageId.toString())
             }
+        }
+
+        // Load thumbnail from ThumbnailCache (prefetched in ChatActivity before transcoding)
+        val localUri = message.localVideoUri
+        if (localUri != null) {
+            val uriString = localUri.toString()
+            
+            // Check if thumbnail is already cached (prefetched before transcoding started)
+            val cachedThumbnail = ThumbnailCache.get(uriString)
+            if (cachedThumbnail != null) {
+                thumbnailView.setImageBitmap(cachedThumbnail)
+                thumbnailView.visibility = View.VISIBLE
+                android.util.Log.d(TAG, "✅ Displaying cached thumbnail for $uriString")
+            } else {
+                // Fallback: show video icon placeholder if thumbnail not yet available
+                thumbnailView.setImageResource(R.drawable.ic_mimetype_video)
+                thumbnailView.visibility = View.VISIBLE
+                android.util.Log.d(TAG, "⏳ Waiting for thumbnail prefetch for $uriString")
+            }
+        } else {
+            // No video URI, show placeholder
+            thumbnailView.setImageResource(R.drawable.ic_mimetype_video)
+            thumbnailView.visibility = View.VISIBLE
         }
     }
     
