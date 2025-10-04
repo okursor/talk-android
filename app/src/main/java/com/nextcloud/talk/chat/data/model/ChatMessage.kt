@@ -158,7 +158,14 @@ data class ChatMessage(
     
     var tempCompressedFile: java.io.File? = null,
     
-    var compressionStartTime: Long = 0L
+    var compressionStartTime: Long = 0L,
+    
+    // Video metadata for detail display
+    var videoDuration: Long? = null,
+    
+    var compressionLevel: CompressionLevel? = null,
+    
+    var estimatedFileSize: Long? = null
 
 ) : MessageContentType,
     MessageContentType.Image {
@@ -493,6 +500,13 @@ data class ChatMessage(
         FEDERATED_USER_REMOVED,
         PHONE_ADDED,
         THREAD_CREATED
+    }
+
+    enum class CompressionLevel(val labelResId: Int) {
+        NONE(com.nextcloud.talk.R.string.nc_video_compression_none),
+        LIGHT(com.nextcloud.talk.R.string.nc_video_compression_light),
+        MEDIUM(com.nextcloud.talk.R.string.nc_video_compression_medium),
+        STRONG(com.nextcloud.talk.R.string.nc_video_compression_strong)
     }
 
     companion object {

@@ -4740,6 +4740,108 @@ class ChatActivity :
         }
     }
 
+    /**
+     * Data class to hold extracted video metadata
+     */
+    private data class VideoMetadata(
+        val duration: Long?, // milliseconds
+        val fileSize: Long?  // bytes
+    )
+
+    /**
+     * Extracts video metadata (duration, file size) for detail display.
+     * Prefers fast MediaStore query (same source as thumbnail cache), falls back to MediaMetadataRetriever.
+     */
+    private fun extractVideoMetadata(videoUri: Uri): VideoMetadata {
+        var duration: Long? = null
+        var fileSize: Long? = null
+        
+        // Try MediaStore first (fast, cached, same source as thumbnail)
+        if (videoUri.scheme == "content") {
+            try {
+                contentResolver.query(
+                    videoUri,
+                    arrayOf(
+                        android.provider.MediaStore.Video.Media.DURATION,
+                        android.provider.MediaStore.Video.Media.SIZE
+                    ),
+                    null,
+                    null,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val durationIdx = cursor.getColumnIndex(android.provider.MediaStore.Video.Media.DURATION)
+                        val sizeIdx = cursor.getColumnIndex(android.provider.MediaStore.Video.Media.SIZE)
+                        
+                        if (durationIdx >= 0) {
+                            duration = cursor.getLong(durationIdx)
+                        }
+                        if (sizeIdx >= 0) {
+                            fileSize = cursor.getLong(sizeIdx)
+                        }
+                        
+                        Log.d(TAG, "✅ MediaStore metadata: duration=${duration}ms, size=$fileSize bytes")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "MediaStore query failed, trying MediaMetadataRetriever fallback", e)
+            }
+        }
+        
+        // Fallback: MediaMetadataRetriever (for file:// URIs or if MediaStore failed)
+        if (duration == null) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(this, videoUri)
+                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                duration = durationStr?.toLongOrNull()
+                Log.d(TAG, "📹 MediaMetadataRetriever duration: ${duration}ms")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to extract video duration", e)
+            } finally {
+                try {
+                    retriever.release()
+                } catch (_: Exception) {}
+            }
+        }
+        
+        // Get file size if not from MediaStore
+        if (fileSize == null) {
+            try {
+                contentResolver.openFileDescriptor(videoUri, "r")?.use { pfd ->
+                    fileSize = pfd.statSize
+                    Log.d(TAG, "📹 File descriptor size: $fileSize bytes")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to get file size", e)
+            }
+        }
+        
+        return VideoMetadata(duration, fileSize)
+    }
+
+    /**
+     * Gets the compression level from user settings
+     * TODO: Replace with actual settings lookup when implemented
+     */
+    /**
+     * Gets the compression level from user settings.
+     * Preference values match enum names: "none", "light", "medium", "strong"
+     */
+    private fun getCompressionLevelFromSettings(): com.nextcloud.talk.chat.data.model.ChatMessage.CompressionLevel {
+        val value = appPreferences.getVideoCompressionLevel()
+        
+        Log.d(TAG, "getCompressionLevelFromSettings: value from DataStore='$value'")
+        
+        return try {
+            // Parse enum by name (preference values are lowercase, enum names are uppercase)
+            com.nextcloud.talk.chat.data.model.ChatMessage.CompressionLevel.valueOf(value.uppercase())
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "Unknown video_compression_level='$value', defaulting to MEDIUM", e)
+            com.nextcloud.talk.chat.data.model.ChatMessage.CompressionLevel.MEDIUM
+        }
+    }
+
 
     private fun createVideoUploadPlaceholder(
         fileUri: String,
@@ -4752,6 +4854,12 @@ class ChatActivity :
         
         // ✅ PREFETCH THUMBNAIL FIRST (before transcoding starts!)
         prefetchVideoThumbnail(videoUri)
+        
+        // ✅ EXTRACT VIDEO METADATA for detail line
+        val metadata = extractVideoMetadata(videoUri)
+        val compressionLevel = getCompressionLevelFromSettings()
+        
+        android.util.Log.d(TAG, "createVideoUploadPlaceholder: metadata=$metadata, compressionLevel=$compressionLevel")
         
         // Create placeholder message immediately with ALL required properties
         val placeholderMessage = com.nextcloud.talk.chat.data.model.ChatMessage().apply {
@@ -4776,6 +4884,11 @@ class ChatActivity :
             transcodeProgress = 0
             uploadProgress = 0
             compressionStartTime = System.currentTimeMillis()
+            
+            // ✅ Set video metadata for detail display
+            videoDuration = metadata.duration
+            this.compressionLevel = compressionLevel
+            estimatedFileSize = metadata.fileSize
             
             // Get original file size
             try {

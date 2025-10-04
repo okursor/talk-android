@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
@@ -23,57 +24,50 @@
             android:scaleType="centerCrop"
             android:src="@drawable/ic_mimetype_video" />
 
-        <!-- Progress Overlay -->
-        <LinearLayout
+        <!-- Progress Overlay with ConstraintLayout for perfect centering -->
+        <androidx.constraintlayout.widget.ConstraintLayout
             android:id="@+id/progressOverlay"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:background="#AA000000"
-            android:gravity="center"
+            android:background="#66000000"
             android:visibility="visible">
 
+            <!-- ProgressBar perfekt vertikal + horizontal zentriert -->
             <ProgressBar
                 android:id="@+id/progressBar"
                 style="@android:style/Widget.ProgressBar.Horizontal"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_width="0dp"
+                android:layout_height="6dp"
                 android:max="100"
-                android:layout_marginStart="12dp"
-                android:layout_marginEnd="12dp"
                 android:progress="0"
                 android:progressTint="@color/colorPrimary"
-                android:progressBackgroundTint="@color/bg_default" />
+                android:progressBackgroundTint="@color/bg_default"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintWidth_percent="0.85"
+                app:layout_constraintVertical_bias="0.5" />
 
+            <!-- StatusText direkt unter ProgressBar, stabil zentriert -->
             <TextView
                 android:id="@+id/statusText"
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
                 android:text="Komprimierung... 0%"
                 android:textColor="@android:color/white"
-                android:textSize="12sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
+                android:gravity="center"
+                android:minWidth="140dp"
+                android:maxLines="1"
                 android:ellipsize="end"
-                android:maxLines="2"
-                android:gravity="center" />
+                app:layout_constraintTop_toBottomOf="@id/progressBar"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                android:layout_marginTop="8dp" />
 
-            <TextView
-                android:id="@+id/fileSizeText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:text=""
-                android:textColor="@color/medium_emphasis_text"
-                android:textSize="10sp"
-                android:ellipsize="end"
-                android:maxLines="1" />
-
-        </LinearLayout>
+        </androidx.constraintlayout.widget.ConstraintLayout>
 
         <!-- Cancel Button -->
         <ImageButton
@@ -103,6 +97,21 @@
         android:ellipsize="end"
         android:maxLines="2"
         tools:text="📹 Video wird komprimiert..." />
+
+    <!-- Video Details (Länge / Kompressionsstärke / Größe) -->
+    <TextView
+        android:id="@+id/videoDetailsText"
+        android:layout_width="200dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:textColor="@color/medium_emphasis_text"
+        android:textSize="11sp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:visibility="gone"
+        tools:text="Länge: 00:12 • Kompr.: Mittel • 8.5 MB" />
 
     <!-- Author and Time -->
     <LinearLayout

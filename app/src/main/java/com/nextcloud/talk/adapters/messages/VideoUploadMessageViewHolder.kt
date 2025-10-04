@@ -12,6 +12,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import com.nextcloud.talk.R
 import com.nextcloud.talk.chat.ChatActivity
 import com.nextcloud.talk.chat.data.model.ChatMessage
@@ -32,7 +33,7 @@ class VideoUploadMessageViewHolder(
     private val progressOverlay: View = itemView.findViewById(R.id.progressOverlay)
     private val progressBar: ProgressBar = itemView.findViewById(R.id.progressBar)
     private val statusText: TextView = itemView.findViewById(R.id.statusText)
-    private val fileSizeText: TextView = itemView.findViewById(R.id.fileSizeText)
+    private val videoDetailsText: TextView = itemView.findViewById(R.id.videoDetailsText)
     private val cancelButton: ImageButton = itemView.findViewById(R.id.cancelButton)
     private val timeText: TextView = itemView.findViewById(R.id.messageTime)
     private val authorText: TextView = itemView.findViewById(R.id.messageAuthor)
@@ -122,6 +123,38 @@ class VideoUploadMessageViewHolder(
             thumbnailView.setImageResource(R.drawable.ic_mimetype_video)
             thumbnailView.visibility = View.VISIBLE
         }
+        
+        // Update video details line (duration, compression, file size)
+        updateVideoDetails(message)
+    }
+    
+    private fun updateVideoDetails(message: ChatMessage) {
+        val details = mutableListOf<String>()
+        
+        // Duration
+        message.videoDuration?.let { durationMs ->
+            val seconds = (durationMs / 1000).toInt()
+            val minutes = seconds / 60
+            val secs = seconds % 60
+            details.add("Länge: ${String.format("%02d:%02d", minutes, secs)}")
+        }
+        
+        // Compression level
+        message.compressionLevel?.let { level ->
+            details.add("Kompr.: ${itemView.context.getString(level.labelResId)}")
+        }
+        
+        // File size
+        message.estimatedFileSize?.let { size ->
+            details.add(formatFileSize(size))
+        }
+        
+        if (details.isNotEmpty()) {
+            videoDetailsText.text = details.joinToString(" • ")
+            videoDetailsText.visibility = View.VISIBLE
+        } else {
+            videoDetailsText.visibility = View.GONE
+        }
     }
     
     private fun updateProgressDisplay(message: ChatMessage) {
@@ -131,23 +164,7 @@ class VideoUploadMessageViewHolder(
                 progressBar.isIndeterminate = false
                 progressBar.progress = message.transcodeProgress
                 statusText.text = "Komprimierung... ${message.transcodeProgress}%"
-                statusText.setTextColor(Color.GRAY)
-                
-                // Live file size updates mit Komprimierungsrate
-                val originalSize = formatFileSize(message.originalFileSize)
-                val currentSize = if (message.currentCompressedSize > 0) {
-                    formatFileSize(message.currentCompressedSize)
-                } else {
-                    "..."
-                }
-                
-                val compressionInfo = if (message.compressionRatio > 0) {
-                    " (${message.compressionRatio}% kleiner)"
-                } else {
-                    ""
-                }
-                
-                fileSizeText.text = "$originalSize → $currentSize$compressionInfo"
+                statusText.setTextColor(ContextCompat.getColor(itemView.context, R.color.colorPrimary))
                 
                 // Geschätzte verbleibende Zeit
                 val estimatedTimeText = getEstimatedTimeText(message)
@@ -162,8 +179,7 @@ class VideoUploadMessageViewHolder(
                 progressBar.isIndeterminate = false
                 progressBar.progress = message.uploadProgress
                 statusText.text = "Upload... ${message.uploadProgress}%"
-                statusText.setTextColor(Color.BLUE)
-                fileSizeText.text = "Größe: ${formatFileSize(message.finalCompressedSize)}"
+                statusText.setTextColor(ContextCompat.getColor(itemView.context, R.color.colorPrimary))
                 cancelButton.visibility = View.VISIBLE
             }
             
@@ -173,7 +189,6 @@ class VideoUploadMessageViewHolder(
                 progressBar.progress = 0
                 statusText.text = "Fehler: ${message.uploadErrorMessage ?: "Unbekannter Fehler"}"
                 statusText.setTextColor(Color.RED)
-                fileSizeText.text = ""
                 cancelButton.visibility = View.GONE
             }
             
@@ -183,21 +198,18 @@ class VideoUploadMessageViewHolder(
                 progressBar.progress = 0
                 statusText.text = "Upload abgebrochen"
                 statusText.setTextColor(Color.GRAY)
-                fileSizeText.text = ""
                 cancelButton.visibility = View.GONE
             }
             
             UploadState.COMPLETED -> {
                 progressOverlay.visibility = View.GONE
                 statusText.text = ""
-                fileSizeText.text = ""
                 cancelButton.visibility = View.GONE
             }
             
             UploadState.NONE -> {
                 progressOverlay.visibility = View.GONE
                 statusText.text = ""
-                fileSizeText.text = ""
                 cancelButton.visibility = View.GONE
             }
         }
@@ -223,9 +235,13 @@ class VideoUploadMessageViewHolder(
         val remainingTime = estimatedTotalTime - elapsed
         
         return when {
-            remainingTime < 10000 -> "(weniger als 10s)"
-            remainingTime < 60000 -> "(~${remainingTime / 1000}s)"
-            else -> "(~${remainingTime / 60000}min)"
+            // Show actual seconds when <10s (but at least 1s to avoid "0s")
+            remainingTime < 10000 -> {
+                val secs = (remainingTime / 1000).coerceAtLeast(1)
+                "${secs}s"
+            }
+            remainingTime < 60000 -> "~${remainingTime / 1000}s"
+            else -> "~${remainingTime / 60000}m"
         }
     }
 }
