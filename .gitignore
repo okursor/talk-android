@@ -90,5 +90,6 @@ freeline_project_description.json
 /gradle/verification-keyring.gpg
 /app/src/main/assets/selfie_segmenter.tflite
 
+*.code-workspace
 .specstory/
 .vscode/

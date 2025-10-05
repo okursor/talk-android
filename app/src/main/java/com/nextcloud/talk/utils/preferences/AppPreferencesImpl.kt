@@ -597,6 +597,24 @@ class AppPreferencesImpl(val context: Context) : AppPreferences {
         }
     }
 
+    // Preferred audio device when Smartwatch mode is enabled (only speaker/earpiece)
+    override fun getPreferredAudioDevice(): String =
+        runBlocking {
+            async { readString(PREFERRED_AUDIO_DEVICE, "SPEAKER_PHONE").first() }
+        }.getCompleted()
+
+    override fun setPreferredAudioDevice(deviceName: String) {
+        runBlocking<Unit> {
+            async { writeString(PREFERRED_AUDIO_DEVICE, deviceName) }
+        }
+    }
+
+    override fun removePreferredAudioDevice() {
+        runBlocking<Unit> {
+            async { writeString(PREFERRED_AUDIO_DEVICE, "SPEAKER_PHONE") }
+        }
+    }
+
     override fun clear() {}
 
     // Font scale preference accessors
@@ -746,8 +764,9 @@ class AppPreferencesImpl(val context: Context) : AppPreferences {
         const val CONVERSATION_LIST_POSITION_OFFSET = "CONVERSATION_LIST_POSITION_OFFSET"
         const val IMAGE_COMPRESSION_LEVEL = "image_compression_level"
         const val SMARTWATCH_MODE_ENABLED = "smartwatch_mode_enabled"
-    const val FONT_SCALE = "font_scale"
-    const val FONT_SCALE_VERSION = "font_scale_version"
+        const val FONT_SCALE = "font_scale"
+        const val FONT_SCALE_VERSION = "font_scale_version"
+        const val PREFERRED_AUDIO_DEVICE = "preferred_audio_device"
         private fun String.convertStringToArray(): Array<Float> {
             var varString = this
             val floatList = mutableListOf<Float>()

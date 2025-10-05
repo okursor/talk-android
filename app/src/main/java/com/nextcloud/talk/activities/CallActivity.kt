@@ -992,10 +992,31 @@ class CallActivity : CallBaseActivity() {
                 availableDevices
             )
         }
-        if (isVoiceOnlyCall) {
-            setDefaultAudioOutputChannel(AudioDevice.EARPIECE)
-        } else {
-            setDefaultAudioOutputChannel(AudioDevice.SPEAKER_PHONE)
+        try {
+            // Use injected appPreferences from BaseActivity (inherited) instead of creating new instance
+            val smartwatchMode = appPreferences.getSmartwatchModeEnabled()
+            if (smartwatchMode) {
+                val preferred = appPreferences.getPreferredAudioDevice()
+                val device = when (preferred) {
+                    "EARPIECE" -> AudioDevice.EARPIECE
+                    else -> AudioDevice.SPEAKER_PHONE
+                }
+                setDefaultAudioOutputChannel(device)
+            } else {
+                if (isVoiceOnlyCall) {
+                    setDefaultAudioOutputChannel(AudioDevice.EARPIECE)
+                } else {
+                    setDefaultAudioOutputChannel(AudioDevice.SPEAKER_PHONE)
+                }
+            }
+        } catch (e: Exception) {
+            // Fallback to default behavior if preferences can't be read
+            Log.e(TAG, "Failed to read smartwatch audio preferences", e)
+            if (isVoiceOnlyCall) {
+                setDefaultAudioOutputChannel(AudioDevice.EARPIECE)
+            } else {
+                setDefaultAudioOutputChannel(AudioDevice.SPEAKER_PHONE)
+            }
         }
         iceServers = ArrayList()
 
@@ -3403,7 +3424,11 @@ class CallActivity : CallBaseActivity() {
             )
             actions.add(RemoteAction(icon, title!!, title, intent))
             mPictureInPictureParamsBuilder.setActions(actions)
-            setPictureInPictureParams(mPictureInPictureParamsBuilder.build())
+            try {
+                setPictureInPictureParams(mPictureInPictureParamsBuilder.build())
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "Failed to set PiP params, device may not support PiP", e)
+            }
         }
     }
 
