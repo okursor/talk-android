@@ -139,6 +139,7 @@ How to translate with transifex:
     <string name="nc_settings_smartwatch_audio_output_title">Smartwatch audio output</string>
     <string name="nc_settings_smartwatch_audio_output_speaker">Speaker</string>
     <string name="nc_settings_smartwatch_audio_output_earpiece">Earpiece</string>
+    <string name="audio_volume_control_title">Call volume</string>
     <string name="nc_settings_font_scale_title">Font size</string>
     <string name="nc_settings_font_scale_normal">Normal</string>
     <string name="nc_settings_font_scale_large">Large</string>

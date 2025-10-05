@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.widget.SeekBar
 import autodagger.AutoInjector
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -17,6 +18,7 @@ import com.nextcloud.android.common.ui.theme.utils.ColorRole
 import com.nextcloud.talk.R
 import com.nextcloud.talk.activities.CallActivity
 import com.nextcloud.talk.application.NextcloudTalkApplication
+import com.nextcloud.talk.call.CallVolumeController
 import com.nextcloud.talk.databinding.DialogAudioOutputBinding
 import com.nextcloud.talk.ui.theme.ViewThemeUtils
 import com.nextcloud.talk.webrtc.WebRtcAudioManager
@@ -41,6 +43,7 @@ class AudioOutputDialog(val callActivity: CallActivity) : BottomSheetDialog(call
         viewThemeUtils.platform.themeDialogDark(dialogAudioOutputBinding.root)
         updateOutputDeviceList()
         initClickListeners()
+        initVolumeControl()
     }
 
     fun updateOutputDeviceList() {
@@ -131,6 +134,43 @@ class AudioOutputDialog(val callActivity: CallActivity) : BottomSheetDialog(call
             callActivity.setAudioOutputChannel(WebRtcAudioManager.AudioDevice.EARPIECE)
             dismiss()
         }
+    }
+
+    private fun initVolumeControl() {
+        try {
+            val volumeController = CallVolumeController(context)
+
+            val maxVolume = volumeController.getMaxVolume()
+            val currentVolume = volumeController.getCurrentVolume()
+
+            dialogAudioOutputBinding.audioVolumeSeekbar.max = maxVolume
+            dialogAudioOutputBinding.audioVolumeSeekbar.progress = currentVolume
+            updateVolumePercentText(currentVolume, maxVolume)
+
+            dialogAudioOutputBinding.audioVolumeSeekbar.setOnSeekBarChangeListener(
+                object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (fromUser) {
+                            volumeController.setVolume(progress)
+                            updateVolumePercentText(progress, maxVolume)
+                        }
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                }
+            )
+
+            dialogAudioOutputBinding.audioVolumeControlSection.visibility = View.VISIBLE
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize volume control", e)
+            dialogAudioOutputBinding.audioVolumeControlSection.visibility = View.GONE
+        }
+    }
+
+    private fun updateVolumePercentText(current: Int, max: Int) {
+        val percent = if (max > 0) (current * 100) / max else 0
+        dialogAudioOutputBinding.audioVolumePercent.text = "$percent%"
     }
 
     override fun onStart() {

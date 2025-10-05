@@ -5,6 +5,7 @@
     <string name="nc_settings_smartwatch_audio_output_title">Smartwatch Audio-Ausgabe</string>
     <string name="nc_settings_smartwatch_audio_output_speaker">Lautsprecher</string>
     <string name="nc_settings_smartwatch_audio_output_earpiece">Ohrhörer</string>
+    <string name="audio_volume_control_title">Anruflautstärke</string>
     <string name="nc_settings_font_scale_title">Schriftgröße</string>
     <string name="nc_settings_font_scale_normal">Normal</string>
     <string name="nc_settings_font_scale_large">Groß</string>
