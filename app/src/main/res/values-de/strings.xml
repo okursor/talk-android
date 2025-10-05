@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
   <resources>
-        <string name="nc_settings_smartwatch_mode_title">Smartwatch-Modus</string>
-        <string name="nc_settings_smartwatch_mode_desc">Aktiviere Schriftskalierung für bessere Lesbarkeit auf kleinen Bildschirmen</string>
-        <string name="nc_settings_font_scale_title">Schriftgröße</string>
-        <string name="nc_settings_font_scale_normal">Normal</string>
-        <string name="nc_settings_font_scale_large">Groß</string>
-        <string name="nc_settings_font_scale_very_large">Sehr groß</string>
+    <string name="nc_settings_smartwatch_mode_title">Smartwatch-Modus</string>
+    <string name="nc_settings_smartwatch_mode_desc">Aktiviere Schriftskalierung für bessere Lesbarkeit auf kleinen Bildschirmen</string>
+    <string name="nc_settings_smartwatch_audio_output_title">Smartwatch Audio-Ausgabe</string>
+    <string name="nc_settings_smartwatch_audio_output_speaker">Lautsprecher</string>
+    <string name="nc_settings_smartwatch_audio_output_earpiece">Ohrhörer</string>
+    <string name="nc_settings_font_scale_title">Schriftgröße</string>
+    <string name="nc_settings_font_scale_normal">Normal</string>
+    <string name="nc_settings_font_scale_large">Groß</string>
+    <string name="nc_settings_font_scale_very_large">Sehr groß</string>
     <string name= "nc_edit">Bearbeiten</string>
     <string name="add_participants">Hinzufügen</string>
     <string name="add_to_notes">Zu Notizen hinzufügen</string>

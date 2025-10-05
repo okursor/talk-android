@@ -223,6 +223,27 @@
                         android:clickable="false"/>
                 </LinearLayout>
 
+                <!-- Preferred audio output for Smartwatch mode: only SPEAKER/EARPIECE -->
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/settings_smartwatch_audio_output_layout"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/standard_half_margin"
+                    android:layout_marginHorizontal="@dimen/standard_margin"
+                    android:hint="@string/nc_settings_smartwatch_audio_output_title">
+
+                    <com.google.android.material.textfield.MaterialAutoCompleteTextView
+                        android:id="@+id/settings_smartwatch_audio_output"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="none"
+                        android:lines="1"
+                        android:popupTheme="@style/ThemeOverlay.AppTheme.PopupMenu"
+                        android:text="" />
+
+                </com.google.android.material.textfield.TextInputLayout>
+
                 <!-- Font scale setting (hidden, Spinner used as primary control) -->
                 <com.google.android.material.textfield.TextInputLayout
                     android:id="@+id/font_scale_input_layout"

@@ -652,13 +652,59 @@ class SettingsActivity :
             val isChecked = binding.settingsSmartwatchModeSwitch.isChecked
             binding.settingsSmartwatchModeSwitch.isChecked = !isChecked
             appPreferences.setSmartwatchModeEnabled(!isChecked)
-            
+
             // Enable/disable font scale setting based on smartwatch mode
             updateFontScaleEnabled()
+            // Enable/disable preferred audio output spinner
+            updateSmartwatchAudioOutputEnabled()
         }
 
         // Initially enable/disable font scale based on current smartwatch mode state
         updateFontScaleEnabled()
+        updateSmartwatchAudioOutputEnabled()
+
+        // Initialize Smartwatch audio output spinner (only two options: Speaker, Earpiece)
+        try {
+            val audioOptions = listOf(
+                resources.getString(R.string.nc_settings_smartwatch_audio_output_speaker),
+                resources.getString(R.string.nc_settings_smartwatch_audio_output_earpiece)
+            )
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, audioOptions)
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            binding.settingsSmartwatchAudioOutput.setAdapter(adapter)
+
+            // Read saved preference
+            val prefDevice = try {
+                appPreferences.getPreferredAudioDevice()
+            } catch (e: Exception) {
+                "SPEAKER_PHONE"
+            }
+            val selectedIndex = if (prefDevice == "EARPIECE") 1 else 0
+            binding.settingsSmartwatchAudioOutput.setText(audioOptions[selectedIndex], false)
+
+            binding.settingsSmartwatchAudioOutput.setOnItemClickListener { parent, _, position, _ ->
+                val selected = parent.getItemAtPosition(position) as String
+                val deviceName = if (selected == resources.getString(R.string.nc_settings_smartwatch_audio_output_earpiece)) {
+                    "EARPIECE"
+                } else {
+                    "SPEAKER_PHONE"
+                }
+                appPreferences.setPreferredAudioDevice(deviceName)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to init smartwatch audio output spinner", e)
+        }
+
+    }
+
+    private fun updateSmartwatchAudioOutputEnabled() {
+        try {
+            val enabled = appPreferences.getSmartwatchModeEnabled()
+            binding.settingsSmartwatchAudioOutput.isEnabled = enabled
+            binding.settingsSmartwatchAudioOutput.alpha = if (enabled) ENABLED_ALPHA else DISABLED_ALPHA
+        } catch (e: Exception) {
+            // ignore
+        }
 
         // Font scale setting (Normal, Groß, Sehr groß)
         // Guard the whole block: any unexpected exception here should not crash the SettingsActivity
@@ -814,7 +860,7 @@ class SettingsActivity :
                                                                         Log.i(TAG, "Font scale: no change (current=$current), skipping write")
                                                                         return@launch
                                                                     }
-                                                                    appPreferences.setFontScaleAsync(selectedFloat)
+                                                                    appPreferences.setFontScale(selectedFloat)
                                                                     Log.i(TAG, "Font scale: wrote $selectedFloat (from runtimeSpinner)")
                                                                     // recreate on main thread after commit
                                                                     withContext(Dispatchers.Main) {
@@ -872,8 +918,8 @@ class SettingsActivity :
                                                             // no change, nothing to do
                                                             return@launch
                                                         }
-                                                        // suspend until the write completes
-                                                        appPreferences.setFontScaleAsync(selectedFloat)
+                                                        // write preference (non-suspending helper)
+                                                        appPreferences.setFontScale(selectedFloat)
                                                         // After successful write, dismiss dropdown and restart on main thread
                                                         withContext(Dispatchers.Main) {
                                                             try { (dropdown as? android.widget.AutoCompleteTextView)?.dismissDropDown() } catch (_: Throwable) {}
