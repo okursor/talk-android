@@ -46,11 +46,30 @@ class CallVolumeController(context: Context) {
     /**
      * Set the volume to a specific level (0 to maxVolume).
      * Returns true if successful, false if permission missing or other error.
+     * 
+     * Special handling for volume 0: explicitly mutes the stream to ensure silence.
      */
     fun setVolume(level: Int): Boolean {
         return try {
             val clamped = max(0, min(level, getMaxVolume()))
+            
+            // Set the volume level
             audioManager.setStreamVolume(stream, clamped, 0)
+            
+            // For volume 0, explicitly mute the stream to ensure complete silence
+            // For volume > 0, ensure stream is not muted
+            if (clamped == 0) {
+                if (!audioManager.isStreamMute(stream)) {
+                    audioManager.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, 0)
+                    Log.d(TAG, "Stream explicitly muted at volume 0")
+                }
+            } else {
+                if (audioManager.isStreamMute(stream)) {
+                    audioManager.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, 0)
+                    Log.d(TAG, "Stream unmuted for volume > 0")
+                }
+            }
+            
             Log.d(TAG, "Volume set to $clamped / ${getMaxVolume()}")
             true
         } catch (e: SecurityException) {
