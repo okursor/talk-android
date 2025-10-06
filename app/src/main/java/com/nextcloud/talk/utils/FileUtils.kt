@@ -841,14 +841,18 @@ object FileUtils {
             var videoEncoderFormatReceived = false
             var audioEncoderFormatReceived = false
 
-            // Audio processing variables
-            var audioInputDone = false
-            var audioOutputDone = false
-            val audioBufferInfo = MediaCodec.BufferInfo()
+            // Audio processing variables - separate flags for each pipeline stage
+            var audioExtractorDone = false  // Extractor has read all samples
+            var audioDecoderOutputDone = false  // Decoder has output EOS
+            var audioEncoderOutputDone = false  // Encoder has output EOS
+            var audioIdleIterations = 0  // Count iterations where ALL audio steps timeout
+            val audioDecoderBufferInfo = MediaCodec.BufferInfo()
+            val audioEncoderBufferInfo = MediaCodec.BufferInfo()
 
             val bufferInfo = MediaCodec.BufferInfo()
             var inputDone = false
             var outputDone = false
+            var videoOutputDone = false
             var processedFrames = 0
             var lastProgressUpdate = System.currentTimeMillis()
             val progressUpdateInterval = 500 // Update every 500ms
@@ -859,300 +863,339 @@ object FileUtils {
             var consecutiveTimeouts = 0
             val maxConsecutiveTimeouts = 200 // Allow up to 200 consecutive timeouts (20s at 100ms each)
 
-            while (!outputDone) {
+            // Main processing loop - continue until both video AND audio are done
+            while (!videoOutputDone || (hasAudio && !audioEncoderOutputDone)) {
                 // Check for overall timeout
                 if (System.currentTimeMillis() - startTime > maxProcessingTimeMs) {
                     Log.e(TAG, "Video compression timeout after ${maxProcessingTimeMs / 1000}s")
                     throw RuntimeException("Video compression timeout")
                 }
 
-                // CRITICAL: Process decoder output first (feeds encoder via OpenGL)
-                val decoderStatus = videoDecoder.dequeueOutputBuffer(bufferInfo, 100L)
-                if (decoderStatus >= 0) {
-                    Log.d(TAG, "compressVideoWithMediaCodec: Decoder output frame ready")
+                if (!videoOutputDone) {
+                    // CRITICAL: Process decoder output first (feeds encoder via OpenGL)
+                    val decoderStatus = videoDecoder.dequeueOutputBuffer(bufferInfo, 100L)
+                    if (decoderStatus >= 0) {
+                        Log.d(TAG, "compressVideoWithMediaCodec: Decoder output frame ready")
 
-                    // Instead of rendering to surface directly, we render to SurfaceTexture
-                    // which will be processed by OpenGL and then sent to encoder
-                    videoDecoder.releaseOutputBuffer(decoderStatus, true) // true = render to SurfaceTexture
+                        // Instead of rendering to surface directly, we render to SurfaceTexture
+                        // which will be processed by OpenGL and then sent to encoder
+                        videoDecoder.releaseOutputBuffer(decoderStatus, true) // true = render to SurfaceTexture
 
-                    // Process the frame through OpenGL transformation
-                    codecInputSurface.makeCurrent()
-                    surfaceRenderer.drawFrame()
+                        // Process the frame through OpenGL transformation
+                        codecInputSurface.makeCurrent()
+                        surfaceRenderer.drawFrame()
 
-                    // Set presentation time for encoder
-                    val presentationTimeUs = surfaceRenderer.getTimestamp() / 1000 // Convert ns to us
-                    codecInputSurface.setPresentationTime(presentationTimeUs * 1000) // Convert back to ns
+                        // Set presentation time for encoder
+                        val presentationTimeUs = surfaceRenderer.getTimestamp() / 1000 // Convert ns to us
+                        codecInputSurface.setPresentationTime(presentationTimeUs * 1000) // Convert back to ns
 
-                    // Swap buffers to send frame to encoder
-                    codecInputSurface.swapBuffers()
+                        // Swap buffers to send frame to encoder
+                        codecInputSurface.swapBuffers()
 
-                    processedFrames++
-
-                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                        Log.d(TAG, "compressVideoWithMediaCodec: Decoder EOS reached")
-                        videoEncoder.signalEndOfInputStream()
-                    }
-                } else if (decoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    // No decoder output yet
-                }
-
-                // Feed input to decoder
-                if (!inputDone) {
-                    val inputBufferIndex = videoDecoder.dequeueInputBuffer(100L)
-                    if (inputBufferIndex >= 0) {
-                        consecutiveTimeouts = 0 // Reset timeout counter on successful dequeue
-                        Log.d(TAG, "compressVideoWithMediaCodec: Got input buffer $inputBufferIndex, processing frame")
-                        val inputBuffer = videoDecoder.getInputBuffer(inputBufferIndex)!!
-                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
-                        if (sampleSize >= 0) {
-                            videoDecoder.queueInputBuffer(
-                                inputBufferIndex,
-                                0,
-                                sampleSize,
-                                extractor.sampleTime,
-                                0
-                            )
-                            extractor.advance()
-                        } else {
-                            videoDecoder.queueInputBuffer(
-                                inputBufferIndex,
-                                0,
-                                0,
-                                0,
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                            )
-                            inputDone = true
-                            Log.d(TAG, "compressVideoWithMediaCodec: Input EOS sent to decoder")
-                        }
-                    }
-                }
-
-                // NOW check encoder output (AFTER decoder processes frames)
-                val encoderStatus = videoEncoder.dequeueOutputBuffer(bufferInfo, 100L)
-                when (encoderStatus) {
-                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        Log.d(TAG, "compressVideoWithMediaCodec: Encoder output format changed")
-                        if (muxerStarted) {
-                            throw RuntimeException("Format changed twice")
-                        }
-                        val newFormat = videoEncoder.outputFormat
-                        Log.d(TAG, "compressVideoWithMediaCodec: Adding video track to muxer: $newFormat")
-                        videoTrackIndexOutput = muxer.addTrack(newFormat)
-                        
-                        // Start muxer immediately when video format is ready
-                        // Audio track will be added later if audio processing succeeds
-                        Log.d(TAG, "compressVideoWithMediaCodec: Starting muxer with video track (audio will be added dynamically if available)")
-                        muxer.start()
-                        muxerStarted = true
-                        Log.d(TAG, "compressVideoWithMediaCodec: Muxer started successfully")
-                        consecutiveTimeouts = 0 // Reset on success
-                    }
-
-                    in 0..Int.MAX_VALUE -> {
-                        consecutiveTimeouts = 0 // Reset timeout counter on successful dequeue
-                        Log.d(TAG, "compressVideoWithMediaCodec: Got encoder output buffer $encoderStatus")
-                        
-                        // If muxer is not started yet, try to start it with a dummy format
-                        if (!muxerStarted && videoTrackIndexOutput == -1) {
-                            Log.w(TAG, "compressVideoWithMediaCodec: Encoder producing data but no format changed event. Creating track from current format.")
-                            val currentFormat = videoEncoder.outputFormat
-                            videoTrackIndexOutput = muxer.addTrack(currentFormat)
-                            muxer.start()
-                            muxerStarted = true
-                            Log.d(TAG, "compressVideoWithMediaCodec: Muxer started with current encoder format")
-                        }
-                        
-                        val outputBuffer = videoEncoder.getOutputBuffer(encoderStatus)!!
-
-                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                            Log.d(TAG, "compressVideoWithMediaCodec: Skipping codec config buffer")
-                            bufferInfo.size = 0
-                        }
-
-                        if (bufferInfo.size != 0 && muxerStarted) {
-                            outputBuffer.position(bufferInfo.offset)
-                            outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                            Log.d(TAG, "Writing video sample: ${bufferInfo.size} bytes, PTS: ${bufferInfo.presentationTimeUs}")
-                            muxer.writeSampleData(videoTrackIndexOutput, outputBuffer, bufferInfo)
-                            Log.v(TAG, "Video sample written successfully")
-
-                            // Update progress tracking
-                            val currentTime = System.currentTimeMillis()
-                            if (currentTime - lastProgressUpdate >= progressUpdateInterval) {
-                                val progress = if (estimatedTotalFrames > 0) {
-                                    kotlin.math.min(99, (processedFrames * 100 / estimatedTotalFrames))
-                                } else {
-                                    kotlin.math.min(99, processedFrames % 100)
-                                }
-
-                                // Estimate current compressed size
-                                val outputFile = File(outputPath)
-                                val currentCompressedSize = if (outputFile.exists()) outputFile.length() else 0L
-
-                                progressCallback?.onProgressUpdate(
-                                    progress,
-                                    processedFrames,
-                                    estimatedTotalFrames,
-                                    originalSizeBytes,
-                                    currentCompressedSize
-                                )
-
-                                lastProgressUpdate = currentTime
-                                Log.d(TAG, "Progress: $progress% ($processedFrames/$estimatedTotalFrames frames)")
-                            }
-                        } else if (!muxerStarted && bufferInfo.size != 0) {
-                            Log.w(TAG, "compressVideoWithMediaCodec: Encoder data available but muxer not started yet")
-                        }
-
-                        videoEncoder.releaseOutputBuffer(encoderStatus, false)
+                        processedFrames++
 
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            Log.d(TAG, "compressVideoWithMediaCodec: Encoder EOS reached")
-                            outputDone = true
+                            Log.d(TAG, "compressVideoWithMediaCodec: Decoder EOS reached")
+                            videoEncoder.signalEndOfInputStream()
+                        }
+                    } else if (decoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                        // No decoder output yet
+                    }
+
+                    // Feed input to decoder
+                    if (!inputDone) {
+                        val inputBufferIndex = videoDecoder.dequeueInputBuffer(100L)
+                        if (inputBufferIndex >= 0) {
+                            consecutiveTimeouts = 0 // Reset timeout counter on successful dequeue
+                            Log.d(TAG, "compressVideoWithMediaCodec: Got input buffer $inputBufferIndex, processing frame")
+                            val inputBuffer = videoDecoder.getInputBuffer(inputBufferIndex)!!
+                            val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                            if (sampleSize >= 0) {
+                                videoDecoder.queueInputBuffer(
+                                    inputBufferIndex,
+                                    0,
+                                    sampleSize,
+                                    extractor.sampleTime,
+                                    0
+                                )
+                                extractor.advance()
+                            } else {
+                                videoDecoder.queueInputBuffer(
+                                    inputBufferIndex,
+                                    0,
+                                    0,
+                                    0,
+                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                                )
+                                inputDone = true
+                                Log.d(TAG, "compressVideoWithMediaCodec: Input EOS sent to decoder")
+                            }
                         }
                     }
 
-                    MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                        // No encoder output available
-                        consecutiveTimeouts++
-                        if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
-                            Log.e(TAG, "Too many consecutive encoder timeouts ($consecutiveTimeouts)")
-                            throw RuntimeException("Video compression stuck - encoder not producing output")
+                    // NOW check encoder output (AFTER decoder processes frames)
+                    val encoderStatus = videoEncoder.dequeueOutputBuffer(bufferInfo, 100L)
+                    when (encoderStatus) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            Log.d(TAG, "compressVideoWithMediaCodec: Encoder output format changed")
+                            if (muxerStarted) {
+                                throw RuntimeException("Format changed twice")
+                            }
+                            val newFormat = videoEncoder.outputFormat
+                            Log.d(TAG, "compressVideoWithMediaCodec: Adding video track to muxer: $newFormat")
+                            videoTrackIndexOutput = muxer.addTrack(newFormat)
+                        
+                            // Start muxer immediately when video format is ready
+                            // Audio track will be added later if audio processing succeeds
+                            Log.d(TAG, "compressVideoWithMediaCodec: Starting muxer with video track (audio will be added dynamically if available)")
+                            muxer.start()
+                            muxerStarted = true
+                            Log.d(TAG, "compressVideoWithMediaCodec: Muxer started successfully")
+                            consecutiveTimeouts = 0 // Reset on success
+                        }
+
+                        in 0..Int.MAX_VALUE -> {
+                            consecutiveTimeouts = 0 // Reset timeout counter on successful dequeue
+                            Log.d(TAG, "compressVideoWithMediaCodec: Got encoder output buffer $encoderStatus")
+                        
+                            // If muxer is not started yet, try to start it with a dummy format
+                            if (!muxerStarted && videoTrackIndexOutput == -1) {
+                                Log.w(TAG, "compressVideoWithMediaCodec: Encoder producing data but no format changed event. Creating track from current format.")
+                                val currentFormat = videoEncoder.outputFormat
+                                videoTrackIndexOutput = muxer.addTrack(currentFormat)
+                                muxer.start()
+                                muxerStarted = true
+                                Log.d(TAG, "compressVideoWithMediaCodec: Muxer started with current encoder format")
+                            }
+                        
+                            val outputBuffer = videoEncoder.getOutputBuffer(encoderStatus)!!
+
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                Log.d(TAG, "compressVideoWithMediaCodec: Skipping codec config buffer")
+                                bufferInfo.size = 0
+                            }
+
+                            if (bufferInfo.size != 0 && muxerStarted) {
+                                outputBuffer.position(bufferInfo.offset)
+                                outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                                Log.d(TAG, "Writing video sample: ${bufferInfo.size} bytes, PTS: ${bufferInfo.presentationTimeUs}")
+                                muxer.writeSampleData(videoTrackIndexOutput, outputBuffer, bufferInfo)
+                                Log.v(TAG, "Video sample written successfully")
+
+                                // Update progress tracking
+                                val currentTime = System.currentTimeMillis()
+                                if (currentTime - lastProgressUpdate >= progressUpdateInterval) {
+                                    val progress = if (estimatedTotalFrames > 0) {
+                                        kotlin.math.min(99, (processedFrames * 100 / estimatedTotalFrames))
+                                    } else {
+                                        kotlin.math.min(99, processedFrames % 100)
+                                    }
+
+                                    // Estimate current compressed size
+                                    val outputFile = File(outputPath)
+                                    val currentCompressedSize = if (outputFile.exists()) outputFile.length() else 0L
+
+                                    progressCallback?.onProgressUpdate(
+                                        progress,
+                                        processedFrames,
+                                        estimatedTotalFrames,
+                                        originalSizeBytes,
+                                        currentCompressedSize
+                                    )
+
+                                    lastProgressUpdate = currentTime
+                                    Log.d(TAG, "Progress: $progress% ($processedFrames/$estimatedTotalFrames frames)")
+                                }
+                            } else if (!muxerStarted && bufferInfo.size != 0) {
+                                Log.w(TAG, "compressVideoWithMediaCodec: Encoder data available but muxer not started yet")
+                            }
+
+                            videoEncoder.releaseOutputBuffer(encoderStatus, false)
+
+                            if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                Log.d(TAG, "compressVideoWithMediaCodec: Encoder EOS reached")
+                                videoOutputDone = true
+                            }
+                        }
+
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                            // No encoder output available
+                            consecutiveTimeouts++
+                            if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
+                                Log.e(TAG, "Too many consecutive encoder timeouts ($consecutiveTimeouts)")
+                                throw RuntimeException("Video compression stuck - encoder not producing output")
+                            }
+                        }
+
+                        else -> {
+                            Log.w(TAG, "compressVideoWithMediaCodec: Unexpected encoder status: $encoderStatus")
                         }
                     }
 
-                    else -> {
-                        Log.w(TAG, "compressVideoWithMediaCodec: Unexpected encoder status: $encoderStatus")
-                    }
-                }
 
-                // Process audio if available
+            } // End of video processing block (if !videoOutputDone)
+
+            // Process audio if available (continues even after video is done)
+            // Audio pipeline: Extractor → Decoder → Encoder → Muxer
+            if (hasAudio && !audioEncoderOutputDone) {
+                Log.d(TAG, "DEBUG: Audio block reached - hasAudio=$hasAudio, audioEncoderOutputDone=$audioEncoderOutputDone")
+                
+                var anyProgress = false  // Track if ANY audio operation succeeds this iteration
+                
                 audioEncoder?.let { encoder ->
                     audioDecoder?.let { decoder ->
-                        // Process audio encoder output (NON-BLOCKING)
-                        val audioEncoderStatus = encoder.dequeueOutputBuffer(audioBufferInfo, 0L)
-                        when (audioEncoderStatus) {
-                            MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                                Log.d(TAG, "compressVideoWithMediaCodec: Audio encoder output format changed")
-                                audioTrackIndexOutput = muxer!!.addTrack(encoder.outputFormat)
-                                Log.d(TAG, "Audio track added to muxer: $audioTrackIndexOutput")
-                                
-                                // Start muxer now that both video and audio tracks are added
-                                if (videoTrackIndexOutput >= 0 && !muxerStarted) {
-                                    Log.d(TAG, "compressVideoWithMediaCodec: Starting muxer (both tracks ready)")
-                                    muxer.start()
-                                    muxerStarted = true
-                                    Log.d(TAG, "compressVideoWithMediaCodec: Muxer started successfully")
-                                }
-                            }
+                        // STEP 1: Feed input to audio decoder from extractor
+                        if (!audioExtractorDone) {
+                            val inputBufferIndex = decoder.dequeueInputBuffer(100L)
+                            Log.d(TAG, "DEBUG STEP 1: dequeueInputBuffer returned: $inputBufferIndex")
                             
-                            in 0..Int.MAX_VALUE -> {
-                                if (muxerStarted && audioTrackIndexOutput >= 0 && audioBufferInfo.size > 0) {
-                                    val encodedData = encoder.getOutputBuffer(audioEncoderStatus)
-                                    encodedData?.let { buffer ->
-                                        muxer!!.writeSampleData(audioTrackIndexOutput, buffer, audioBufferInfo)
+                            if (inputBufferIndex >= 0) {
+                                anyProgress = true
+                                
+                                // CRITICAL: Check getSampleTrackIndex() FIRST!
+                                val trackIndex = audioExtractor!!.getSampleTrackIndex()
+                                
+                                if (trackIndex < 0) {
+                                    decoder.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    audioExtractorDone = true
+                                    Log.d(TAG, "Audio extractor finished (getSampleTrackIndex=-1) - EOS sent to decoder")
+                                } else {
+                                    val inputBuffer = decoder.getInputBuffer(inputBufferIndex)
+                                    val sampleSize = audioExtractor.readSampleData(inputBuffer!!, 0)
+                                    
+                                    if (sampleSize > 0) {
+                                        val presentationTimeUs = audioExtractor.sampleTime
+                                        decoder.queueInputBuffer(
+                                            inputBufferIndex,
+                                            0,
+                                            sampleSize,
+                                            presentationTimeUs,
+                                            audioExtractor.sampleFlags
+                                        )
+                                        audioExtractor.advance()
+                                        Log.d(TAG, "Audio extractor→decoder: $sampleSize bytes, PTS: $presentationTimeUs")
+                                    } else {
+                                        decoder.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                        audioExtractorDone = true
+                                        Log.d(TAG, "Audio extractor finished (sampleSize=$sampleSize) - EOS sent to decoder")
                                     }
                                 }
-                                encoder.releaseOutputBuffer(audioEncoderStatus, false)
-                                
-                                if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                                    audioOutputDone = true
-                                    Log.d(TAG, "Audio encoder EOS reached")
-                                }
+                            } else {
+                                Log.d(TAG, "DEBUG STEP 1: No input buffer available (timeout)")
                             }
                         }
 
-                        // Process audio decoder output -> encoder input
-                        val audioDecoderStatus = decoder.dequeueOutputBuffer(audioBufferInfo, 0L)
-                        if (audioDecoderStatus >= 0) {
-                            val decodedData = decoder.getOutputBuffer(audioDecoderStatus)
-                            if (decodedData != null && audioBufferInfo.size > 0) {
-                                // Feed to encoder
-                                val encoderInputIndex = encoder.dequeueInputBuffer(0L)
-                                if (encoderInputIndex >= 0) {
-                                    val encoderInputBuffer = encoder.getInputBuffer(encoderInputIndex)
-                                    encoderInputBuffer?.clear()
-                                    encoderInputBuffer?.put(decodedData)
-                                    encoder.queueInputBuffer(
-                                        encoderInputIndex,
-                                        0,
-                                        audioBufferInfo.size,
-                                        audioBufferInfo.presentationTimeUs,
-                                        audioBufferInfo.flags
-                                    )
-                                }
-                            }
-                            decoder.releaseOutputBuffer(audioDecoderStatus, false)
+                        // STEP 2: Process audio decoder output → encoder input
+                        if (!audioDecoderOutputDone) {
+                            val audioDecoderStatus = decoder.dequeueOutputBuffer(audioDecoderBufferInfo, 100L)
+                            Log.d(TAG, "DEBUG STEP 2: dequeueOutputBuffer returned: $audioDecoderStatus")
                             
-                            if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                                encoder.signalEndOfInputStream()
+                            if (audioDecoderStatus >= 0) {
+                                anyProgress = true
+                                val decodedData = decoder.getOutputBuffer(audioDecoderStatus)
+                                val hasEosFlag = (audioDecoderBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                                
+                                if (decodedData != null) {
+                                    val encoderInputIndex = encoder.dequeueInputBuffer(100L)
+                                    if (encoderInputIndex >= 0) {
+                                        val encoderInputBuffer = encoder.getInputBuffer(encoderInputIndex)
+                                        encoderInputBuffer?.clear()
+                                        
+                                        if (audioDecoderBufferInfo.size > 0) {
+                                            decodedData.position(audioDecoderBufferInfo.offset)
+                                            decodedData.limit(audioDecoderBufferInfo.offset + audioDecoderBufferInfo.size)
+                                            encoderInputBuffer?.put(decodedData)
+                                            Log.d(TAG, "Audio decoder→encoder: ${audioDecoderBufferInfo.size} bytes, PTS: ${audioDecoderBufferInfo.presentationTimeUs}")
+                                        }
+                                        
+                                        encoder.queueInputBuffer(
+                                            encoderInputIndex,
+                                            0,
+                                            audioDecoderBufferInfo.size,
+                                            audioDecoderBufferInfo.presentationTimeUs,
+                                            audioDecoderBufferInfo.flags
+                                        )
+                                        
+                                        if (hasEosFlag) {
+                                            Log.d(TAG, "Audio decoder EOS propagated to encoder via queueInputBuffer")
+                                        }
+                                    } else {
+                                        Log.w(TAG, "Audio encoder input buffer not available (timeout)")
+                                    }
+                                }
+                                
+                                decoder.releaseOutputBuffer(audioDecoderStatus, false)
+                                
+                                if (hasEosFlag) {
+                                    audioDecoderOutputDone = true
+                                    Log.d(TAG, "Audio decoder EOS detected - decoder stage complete")
+                                }
+                            } else {
+                                Log.d(TAG, "DEBUG STEP 2: No output available (status: $audioDecoderStatus)")
                             }
                         }
+                    } // End of audioDecoder?.let
 
-                        // Feed input to audio decoder
-                        if (!audioInputDone) {
-                            val inputBufferIndex = decoder.dequeueInputBuffer(0L)
-                            if (inputBufferIndex >= 0) {
-                                val inputBuffer = decoder.getInputBuffer(inputBufferIndex)
-                                val sampleSize = audioExtractor!!.readSampleData(inputBuffer!!, 0)
-                                if (sampleSize >= 0) {
-                                    decoder.queueInputBuffer(
-                                        inputBufferIndex,
-                                        0,
-                                        sampleSize,
-                                        audioExtractor.sampleTime,
-                                        audioExtractor.sampleFlags
-                                    )
-                                    audioExtractor.advance()
-                                } else {
-                                    decoder.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                    audioInputDone = true
+                    // STEP 3: Process audio encoder output LAST
+                    val audioEncoderStatus = encoder.dequeueOutputBuffer(audioEncoderBufferInfo, 100L)
+                    Log.d(TAG, "DEBUG STEP 3: dequeueOutputBuffer returned: $audioEncoderStatus")
+                    when (audioEncoderStatus) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            anyProgress = true
+                            Log.d(TAG, "compressVideoWithMediaCodec: Audio encoder output format changed")
+                            audioTrackIndexOutput = muxer!!.addTrack(encoder.outputFormat)
+                            Log.d(TAG, "Audio track added to muxer: $audioTrackIndexOutput")
+                            
+                            if (videoTrackIndexOutput >= 0 && !muxerStarted) {
+                                Log.d(TAG, "compressVideoWithMediaCodec: Starting muxer (both tracks ready)")
+                                muxer.start()
+                                muxerStarted = true
+                                Log.d(TAG, "compressVideoWithMediaCodec: Muxer started successfully")
+                            }
+                        }
+                        
+                        in 0..Int.MAX_VALUE -> {
+                            anyProgress = true
+                            if (muxerStarted && audioTrackIndexOutput >= 0) {
+                                if (audioEncoderBufferInfo.size > 0) {
+                                    val encodedData = encoder.getOutputBuffer(audioEncoderStatus)
+                                    encodedData?.let { buffer ->
+                                        buffer.position(audioEncoderBufferInfo.offset)
+                                        buffer.limit(audioEncoderBufferInfo.offset + audioEncoderBufferInfo.size)
+                                        muxer!!.writeSampleData(audioTrackIndexOutput, buffer, audioEncoderBufferInfo)
+                                        Log.d(TAG, "Audio sample written: ${audioEncoderBufferInfo.size} bytes, PTS: ${audioEncoderBufferInfo.presentationTimeUs}")
+                                    }
                                 }
                             }
+                            encoder.releaseOutputBuffer(audioEncoderStatus, false)
+                            
+                            if (audioEncoderBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                audioEncoderOutputDone = true
+                                Log.d(TAG, "Audio encoder EOS reached - audio pipeline complete")
+                            }
+                        }
+                        
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                            Log.d(TAG, "DEBUG STEP 3: No output available (timeout)")
                         }
                     }
+                } // End of audioEncoder?.let
+                
+                // CRITICAL: Idle detection
+                if (anyProgress) {
+                    audioIdleIterations = 0
+                } else {
+                    audioIdleIterations++
+                    Log.d(TAG, "Audio pipeline idle (iteration $audioIdleIterations)")
                     
-                    // Process audio encoder output
-                    audioEncoder?.let { encoder ->
-                        val audioEncoderBufferInfo = MediaCodec.BufferInfo()
-                        val encoderStatus = encoder.dequeueOutputBuffer(audioEncoderBufferInfo, 0L)
-                        
-                        when (encoderStatus) {
-                            MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                                Log.d(TAG, "compressVideoWithMediaCodec: Audio encoder output format changed")
-                                if (audioTrackIndexOutput == -1) {
-                                    val newFormat = encoder.outputFormat
-                                    Log.d(TAG, "compressVideoWithMediaCodec: Adding audio track to muxer: $newFormat")
-                                    audioTrackIndexOutput = muxer.addTrack(newFormat)
-                                    Log.d(TAG, "compressVideoWithMediaCodec: Audio track added with index: $audioTrackIndexOutput")
-                                }
-                            }
-                            
-                            in 0..Int.MAX_VALUE -> {
-                                Log.d(TAG, "compressVideoWithMediaCodec: Got audio encoder output buffer $encoderStatus")
-                                val outputBuffer = encoder.getOutputBuffer(encoderStatus)!!
-                                
-                                if ((audioEncoderBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                                    Log.d(TAG, "compressVideoWithMediaCodec: Skipping audio codec config buffer")
-                                    audioEncoderBufferInfo.size = 0
-                                }
-                                
-                                if (audioEncoderBufferInfo.size != 0 && muxerStarted && audioTrackIndexOutput != -1) {
-                                    outputBuffer.position(audioEncoderBufferInfo.offset)
-                                    outputBuffer.limit(audioEncoderBufferInfo.offset + audioEncoderBufferInfo.size)
-                                    muxer.writeSampleData(audioTrackIndexOutput, outputBuffer, audioEncoderBufferInfo)
-                                    Log.d(TAG, "compressVideoWithMediaCodec: Audio frame written to muxer")
-                                }
-                                
-                                encoder.releaseOutputBuffer(encoderStatus, false)
-                                
-                                if (audioEncoderBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                                    Log.d(TAG, "compressVideoWithMediaCodec: Audio encoder reached end of stream")
-                                }
-                            }
-                        }
+                    if (audioIdleIterations >= 30) {
+                        Log.w(TAG, "Audio pipeline stuck after $audioIdleIterations idle iterations - forcing completion")
+                        audioExtractorDone = true
+                        audioDecoderOutputDone = true
+                        audioEncoderOutputDone = true
                     }
                 }
+            } // End of if (hasAudio)
             }
 
             Log.d(TAG, "Video compression completed successfully")

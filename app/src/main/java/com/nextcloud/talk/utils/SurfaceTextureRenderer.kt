@@ -27,14 +27,20 @@ class SurfaceTextureRenderer {
         private const val TAG = "SurfaceTextureRenderer"
 
         // Simple vertex shader for texture rendering
+        // Note: we apply both an MVP matrix for vertex positions and a separate
+        // texture transform matrix (uTexMatrix) provided by SurfaceTexture so
+        // decoder-side rotation/flip metadata is respected.
         private const val VERTEX_SHADER = """
             uniform mat4 uMVPMatrix;
+            uniform mat4 uTexMatrix;
             attribute vec4 aPosition;
             attribute vec4 aTextureCoord;
             varying vec2 vTextureCoord;
             void main() {
                 gl_Position = uMVPMatrix * aPosition;
-                vTextureCoord = aTextureCoord.xy;
+                // apply SurfaceTexture transform to texture coordinates
+                vec4 tc = uTexMatrix * aTextureCoord;
+                vTextureCoord = tc.xy;
             }
         """
 
@@ -67,6 +73,7 @@ class SurfaceTextureRenderer {
     private var positionHandle: Int = 0
     private var textureCoordHandle: Int = 0
     private var textureHandle: Int = 0
+    private var texMatrixHandle: Int = 0
 
     private var textureId: Int = 0
     private var surfaceTexture: SurfaceTexture? = null
@@ -117,7 +124,8 @@ class SurfaceTextureRenderer {
         positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
         textureCoordHandle = GLES20.glGetAttribLocation(program, "aTextureCoord")
         mvpMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
-        textureHandle = GLES20.glGetUniformLocation(program, "sTexture")
+    textureHandle = GLES20.glGetUniformLocation(program, "sTexture")
+    texMatrixHandle = GLES20.glGetUniformLocation(program, "uTexMatrix")
 
         Log.d(
             TAG,
@@ -180,49 +188,33 @@ class SurfaceTextureRenderer {
 
     /**
      * Set video rotation transformation
+     * Note: Rotation is now handled automatically by SurfaceTexture.getTransformMatrix()
+     * which contains all decoder metadata (rotation, flip, crop). This method just stores
+     * the rotation value for logging purposes.
      * @param rotation Rotation in degrees (0, 90, 180, 270)
      */
     fun setRotation(rotation: Int) {
         videoRotation = rotation
-        Log.d(TAG, "Setting video rotation to $rotation degrees")
+        Log.d(TAG, "Video rotation metadata detected: $rotation° (handled automatically by SurfaceTexture transform)")
         
-        // Create rotation matrix
+        // No manual rotation needed - getTransformMatrix() provides the correct transform
+        // Set rotation matrix to identity so it doesn't interfere with SurfaceTexture transform
         Matrix.setIdentityM(rotationMatrix, 0)
-        when (rotation) {
-            90 -> {
-                Matrix.rotateM(rotationMatrix, 0, -90f, 0f, 0f, 1f)
-                Log.d(TAG, "Applied -90° rotation matrix (portrait to landscape correction)")
-            }
-            180 -> {
-                Matrix.rotateM(rotationMatrix, 0, -180f, 0f, 0f, 1f)
-                Log.d(TAG, "Applied -180° rotation matrix")
-            }
-            270 -> {
-                Matrix.rotateM(rotationMatrix, 0, -270f, 0f, 0f, 1f)
-                Log.d(TAG, "Applied -270° rotation matrix (portrait to landscape correction)")
-            }
-            else -> {
-                Log.d(TAG, "No rotation applied (0°)")
-            }
-        }
         
-        // Update MVP matrix with rotation
+        // Update MVP matrix without manual rotation
         updateMvpMatrix()
     }
     
     /**
-     * Update MVP matrix combining projection, view, and rotation
+     * Update MVP matrix combining projection and view (without manual rotation)
+     * Rotation is handled by SurfaceTexture.getTransformMatrix() in drawFrame()
      */
     private fun updateMvpMatrix() {
-        val tempMatrix = FloatArray(16)
+        // Simply combine projection and view matrices
+        // No manual rotation needed - handled by texture transform matrix
+        Matrix.multiplyMM(mvpMatrix, 0, projectionMatrix, 0, viewMatrix, 0)
         
-        // Combine view and rotation matrices
-        Matrix.multiplyMM(tempMatrix, 0, viewMatrix, 0, rotationMatrix, 0)
-        
-        // Combine with projection
-        Matrix.multiplyMM(mvpMatrix, 0, projectionMatrix, 0, tempMatrix, 0)
-        
-        Log.d(TAG, "MVP matrix updated with rotation: $videoRotation°")
+        Log.d(TAG, "MVP matrix updated (rotation handled by SurfaceTexture transform)")
     }
 
     /**
@@ -244,6 +236,11 @@ class SurfaceTextureRenderer {
 
         // Set MVP matrix
         GLES20.glUniformMatrix4fv(mvpMatrixHandle, 1, false, mvpMatrix, 0)
+
+        // Get and upload SurfaceTexture transform matrix so decoder metadata
+        // (rotation/flip) is applied when sampling the external texture.
+        surfaceTexture?.getTransformMatrix(textureTransformMatrix)
+        GLES20.glUniformMatrix4fv(texMatrixHandle, 1, false, textureTransformMatrix, 0)
 
         // Set vertex attributes
         vertexBuffer.position(0)
