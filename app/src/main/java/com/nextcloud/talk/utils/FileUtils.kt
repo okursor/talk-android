@@ -1164,6 +1164,37 @@ object FileUtils {
                                         buffer.limit(audioEncoderBufferInfo.offset + audioEncoderBufferInfo.size)
                                         muxer!!.writeSampleData(audioTrackIndexOutput, buffer, audioEncoderBufferInfo)
                                         Log.d(TAG, "Audio sample written: ${audioEncoderBufferInfo.size} bytes, PTS: ${audioEncoderBufferInfo.presentationTimeUs}")
+                                        
+                                        // Update progress during audio processing
+                                        val currentTime = System.currentTimeMillis()
+                                        if (currentTime - lastProgressUpdate >= progressUpdateInterval) {
+                                            val outputFile = File(outputPath)
+                                            val currentCompressedSize = if (outputFile.exists()) outputFile.length() else 0L
+                                            
+                                            // When video is done and we're only processing audio, show near-completion progress
+                                            val progress = if (videoOutputDone) {
+                                                // Video done, audio still processing: 95-99%
+                                                kotlin.math.min(99, 95 + ((currentTime - startTime) % 4000) / 1000).toInt()
+                                            } else {
+                                                // Normal progress calculation based on frames
+                                                if (estimatedTotalFrames > 0) {
+                                                    kotlin.math.min(99, (processedFrames * 100 / estimatedTotalFrames))
+                                                } else {
+                                                    kotlin.math.min(99, processedFrames % 100)
+                                                }
+                                            }
+                                            
+                                            progressCallback?.onProgressUpdate(
+                                                progress,
+                                                processedFrames,
+                                                estimatedTotalFrames,
+                                                originalSizeBytes,
+                                                currentCompressedSize
+                                            )
+                                            
+                                            lastProgressUpdate = currentTime
+                                            Log.d(TAG, "Audio progress: $progress%")
+                                        }
                                     }
                                 }
                             }
@@ -1201,10 +1232,21 @@ object FileUtils {
             Log.d(TAG, "Video compression completed successfully")
             Log.d(TAG, "Muxer started: $muxerStarted, Video track: $videoTrackIndexOutput, Audio track: $audioTrackIndexOutput")
 
-            // Report final completion with actual file sizes
+            // Send final 100% progress update before completion callback
             val outputFile = File(outputPath)
+            val finalCompressedSize = if (outputFile.exists()) outputFile.length() else 0L
+            
+            progressCallback?.onProgressUpdate(
+                100,
+                estimatedTotalFrames,
+                estimatedTotalFrames,
+                originalSizeBytes,
+                finalCompressedSize
+            )
+            Log.d(TAG, "Final progress update: 100%")
+
+            // Report final completion with actual file sizes
             Log.d(TAG, "Output file exists: ${outputFile.exists()}, size: ${outputFile.length()}")
-            val finalCompressedSize = outputFile.length()
             val compressionRatio = if (originalSizeBytes > 0) {
                 ((originalSizeBytes - finalCompressedSize) * 100 / originalSizeBytes).toInt()
             } else {
