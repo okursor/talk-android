@@ -4992,10 +4992,31 @@ class ChatActivity :
                                                 ((originalSize - currentSize) * 100 / originalSize).toInt()
                                         }
                                     }
+                                    "compression_completed" -> {
+                                        android.util.Log.d(TAG, "✅ Compression completed: 80% (upload will be 80-100%)")
+                                        message.uploadState = com.nextcloud.talk.models.UploadState.TRANSCODING
+                                        message.transcodeProgress = 80  // Compression ends at 80%, upload will continue to 100%
+                                        val compressedSize = progress.getLong("compressedSizeBytes", 0L)
+                                        message.currentCompressedSize = compressedSize
+                                        message.finalCompressedSize = compressedSize
+                                        message.originalFileSize = originalSize
+                                        
+                                        // Calculate final compression ratio
+                                        if (originalSize > 0 && compressedSize > 0) {
+                                            message.compressionRatio = 
+                                                ((originalSize - compressedSize) * 100 / originalSize).toInt()
+                                        }
+                                    }
                                     "uploading" -> {
                                         android.util.Log.d(TAG, "⬆️ Updating UPLOADING: $progressPercent%")
                                         message.uploadState = com.nextcloud.talk.models.UploadState.UPLOADING
                                         message.uploadProgress = progressPercent
+                                        
+                                        // Keep transcode progress at final value (80%)
+                                        if (message.transcodeProgress < 80) {
+                                            message.transcodeProgress = 80
+                                        }
+                                        
                                         message.finalCompressedSize = currentSize
                                     }
                                 }

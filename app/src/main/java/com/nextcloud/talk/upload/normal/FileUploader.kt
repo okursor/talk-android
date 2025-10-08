@@ -22,14 +22,52 @@ import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.schedulers.Schedulers
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.RequestBody
 import okhttp3.Response
+import okio.BufferedSink
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+
+/**
+ * RequestBody wrapper that reports upload progress
+ */
+private class ProgressRequestBody(
+    private val file: File,
+    private val contentType: MediaType?,
+    private val progressListener: (bytesWritten: Long, totalBytes: Long) -> Unit
+) : RequestBody() {
+
+    override fun contentType(): MediaType? = contentType
+
+    override fun contentLength(): Long = file.length()
+
+    override fun writeTo(sink: BufferedSink) {
+        val fileLength = file.length()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        val inputStream = file.inputStream()
+        var uploaded = 0L
+
+        inputStream.use { stream ->
+            var read: Int
+            while (stream.read(buffer).also { read = it } != -1) {
+                uploaded += read
+                sink.write(buffer, 0, read)
+
+                // Report progress
+                progressListener(uploaded, fileLength)
+            }
+        }
+    }
+
+    companion object {
+        private const val DEFAULT_BUFFER_SIZE = 8192
+    }
+}
 
 class FileUploader(
     okHttpClient: OkHttpClient,
@@ -47,7 +85,13 @@ class FileUploader(
         initHttpClient(okHttpClient, currentUser)
     }
 
-    fun upload(sourceFileUri: Uri, fileName: String, remotePath: String, metaData: String?): Observable<Boolean> =
+    fun upload(
+        sourceFileUri: Uri,
+        fileName: String,
+        remotePath: String,
+        metaData: String?,
+        progressListener: ((Int) -> Unit)? = null
+    ): Observable<Boolean> =
         ncApi.uploadFile(
             ApiUtils.getCredentials(
                 currentUser.username,
@@ -58,7 +102,7 @@ class FileUploader(
                 currentUser.userId!!,
                 remotePath
             ),
-            createRequestBody(sourceFileUri)
+            createRequestBody(sourceFileUri, progressListener)
         )
             .subscribeOn(Schedulers.io())
             .observeOn(AndroidSchedulers.mainThread())
@@ -76,7 +120,7 @@ class FileUploader(
                     if (response.code() == HTTP_CODE_NOT_FOUND ||
                         response.code() == HTTP_CODE_CONFLICT
                     ) {
-                        createDavResource(sourceFileUri, fileName, remotePath, metaData)
+                        createDavResource(sourceFileUri, fileName, remotePath, metaData, progressListener)
                     } else {
                         Observable.just(false)
                     }
@@ -87,7 +131,8 @@ class FileUploader(
         sourceFileUri: Uri,
         fileName: String,
         remotePath: String,
-        metaData: String?
+        metaData: String?,
+        progressListener: ((Int) -> Unit)? = null
     ): Observable<Boolean> =
         Observable.fromCallable {
             val userFileUploadPath = ApiUtils.userFileUploadPath(
@@ -113,23 +158,42 @@ class FileUploader(
             true
         }
             .subscribeOn(Schedulers.io())
-            .flatMap { upload(sourceFileUri, fileName, remotePath, metaData) }
+            .flatMap { upload(sourceFileUri, fileName, remotePath, metaData, progressListener) }
 
     @Suppress("Detekt.TooGenericExceptionCaught")
-    private fun createRequestBody(sourceFileUri: Uri): RequestBody? {
-        var requestBody: RequestBody? = null
-        try {
-            val input: InputStream = context.contentResolver.openInputStream(sourceFileUri)!!
-            input.use {
-                val buf = ByteArray(input.available())
-                while (it.read(buf) != -1) {
-                    requestBody = RequestBody.create("application/octet-stream".toMediaTypeOrNull(), buf)
+    private fun createRequestBody(
+        sourceFileUri: Uri,
+        progressListener: ((Int) -> Unit)? = null
+    ): RequestBody? {
+        return try {
+            val contentType = "application/octet-stream".toMediaTypeOrNull()
+            
+            if (progressListener != null) {
+                // Use ProgressRequestBody for real upload progress
+                ProgressRequestBody(file, contentType) { bytesWritten, totalBytes ->
+                    val percentage = if (totalBytes > 0) {
+                        (bytesWritten * 100 / totalBytes).toInt()
+                    } else {
+                        0
+                    }
+                    progressListener(percentage)
                 }
+            } else {
+                // Fallback: original implementation without progress
+                var requestBody: RequestBody? = null
+                val input: InputStream = context.contentResolver.openInputStream(sourceFileUri)!!
+                input.use {
+                    val buf = ByteArray(input.available())
+                    while (it.read(buf) != -1) {
+                        requestBody = RequestBody.create(contentType, buf)
+                    }
+                }
+                requestBody
             }
         } catch (e: Exception) {
             Log.e(TAG, "failed to create RequestBody for $sourceFileUri", e)
+            null
         }
-        return requestBody
     }
 
     private fun initHttpClient(okHttpClient: OkHttpClient, currentUser: User) {

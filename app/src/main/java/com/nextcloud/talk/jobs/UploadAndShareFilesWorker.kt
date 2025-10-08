@@ -89,6 +89,9 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     private var isChunkedUploading = false
     private var file: File? = null
     private var chunkedFileUploader: ChunkedFileUploader? = null
+    
+    // Monotonicity guard: ensure progress never goes backwards
+    private var lastReportedProgress = 0
 
     @Suppress("Detekt.TooGenericExceptionCaught")
     override fun doWork(): Result {
@@ -163,6 +166,18 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
             initNotificationSetup()
             file?.let { isChunkedUploading = it.length() > CHUNK_UPLOAD_THRESHOLD_SIZE }
+            
+            // Set upload status before starting upload
+            setProgressWithMonotonicityGuard(
+                Data.Builder()
+                    .putString("status", "uploading")
+                    .putString("fileName", fileName)
+                    .putInt("progress", 0)
+                    .putString("phase", "Wird hochgeladen...")
+                    .putLong("currentSizeBytes", file?.length() ?: 0L)
+                    .build()
+            )
+            
             val uploadSuccess: Boolean = uploadFile(finalUri, metaData, remotePath)
 
             if (uploadSuccess) {
@@ -200,9 +215,42 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         } else {
             Log.d(TAG, "starting normal upload (not chunked) of $fileName")
 
-            FileUploader(okHttpClient, context, currentUser, roomToken, ncApi, file!!)
-                .upload(fileUri, fileName, remotePath, metaData)
+            // Initialize notification for normal upload
+            initNotificationWithPercentage()
+
+            // Use FileUploader with real progress callback
+            val uploadResult = FileUploader(okHttpClient, context, currentUser, roomToken, ncApi, file!!)
+                .upload(fileUri, fileName, remotePath, metaData) { uploadPercentage ->
+                    // Real upload progress callback! 🎉
+                    // Map upload progress to 80-100% range (compression was 0-80%)
+                    val totalProgress = 80 + (uploadPercentage * 20 / 100)
+                    Log.d(TAG, "Normal upload progress: $uploadPercentage% (total: $totalProgress%)")
+                    
+                    // Update notification
+                    mBuilder?.let { builder ->
+                        val notification = builder
+                            .setContentTitle(context.resources.getString(R.string.nc_upload_in_progess))
+                            .setContentText(getNotificationContentText(totalProgress))
+                            .setProgress(100, totalProgress, false)
+                            .setOngoing(true)
+                            .build()
+                        mNotifyManager?.notify(notificationId, notification)
+                    }
+                    
+                    // Update WorkManager progress for UI observation
+                    setProgressWithMonotonicityGuard(
+                        Data.Builder()
+                            .putString("status", "uploading")
+                            .putString("fileName", fileName)
+                            .putInt("progress", totalProgress)
+                            .putString("phase", "Wird hochgeladen...")
+                            .putLong("currentSizeBytes", file!!.length())
+                            .build()
+                    )
+                }
                 .blockingFirst()
+
+            uploadResult
         }
 
     private fun getRemotePath(currentUser: User): String {
@@ -213,23 +261,42 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     }
 
     override fun onTransferProgress(percentage: Int) {
+        // Map chunked upload progress to 80-100% range (compression was 0-80%)
+        val totalProgress = 80 + (percentage * 20 / 100)
+        
         val progressUpdateNotification = mBuilder!!
-            .setProgress(HUNDRED_PERCENT, percentage, false)
-            .setContentText(getNotificationContentText(percentage))
+            .setProgress(HUNDRED_PERCENT, totalProgress, false)
+            .setContentText(getNotificationContentText(totalProgress))
             .build()
 
         mNotifyManager!!.notify(notificationId, progressUpdateNotification)
         
-        // Also update WorkManager progress for UI observation
-        setProgressAsync(
+        // Also update WorkManager progress for UI observation with monotonicity guard
+        setProgressWithMonotonicityGuard(
             Data.Builder()
                 .putString("status", "uploading")
                 .putString("fileName", fileName)
-                .putInt("progress", percentage)
+                .putInt("progress", totalProgress)
                 .putString("phase", "Wird hochgeladen...")
                 .putLong("currentSizeBytes", file?.length() ?: 0L)
                 .build()
         )
+    }
+    
+    /**
+     * Sets progress with monotonicity guard - ensures progress never goes backwards
+     */
+    private fun setProgressWithMonotonicityGuard(data: Data) {
+        val newProgress = data.getInt("progress", 0)
+        
+        // Only update if progress is moving forward or staying the same
+        if (newProgress >= lastReportedProgress) {
+            lastReportedProgress = newProgress
+            setProgressAsync(data)
+            Log.v(TAG, "✅ Progress updated: $newProgress%")
+        } else {
+            Log.w(TAG, "⚠️ Progress going backwards blocked: $newProgress% < $lastReportedProgress%")
+        }
     }
 
     override fun onStopped() {
@@ -539,7 +606,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                     }
 
                     // Update WorkManager progress
-                    setProgressAsync(
+                    setProgressWithMonotonicityGuard(
                         Data.Builder()
                             .putString("status", "compressing")
                             .putString("fileName", originalFile.name)
@@ -590,7 +657,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                         0L
                     }
 
-                    setProgressAsync(
+                    setProgressWithMonotonicityGuard(
                         Data.Builder()
                             .putString("status", "compressing")
                             .putString("fileName", originalFile.name)
@@ -636,11 +703,11 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                         mNotifyManager?.notify(notificationId, notification)
                     }
 
-                    setProgressAsync(
+                    setProgressWithMonotonicityGuard(
                         Data.Builder()
                             .putString("status", "compression_completed")
                             .putString("fileName", originalFile.name)
-                            .putInt("progress", 100)
+                            .putInt("progress", 80)  // Compression is 0-80%, upload will be 80-100%
                             .putString("phase", "Video-Komprimierung abgeschlossen")
                             .putLong("originalSizeBytes", originalSizeBytes)
                             .putLong("compressedSizeBytes", compressedSizeBytes)
@@ -671,7 +738,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                         mNotifyManager?.notify(notificationId, notification)
                     }
 
-                    setProgressAsync(
+                    setProgressWithMonotonicityGuard(
                         Data.Builder()
                             .putString("status", "compression_failed")
                             .putString("fileName", originalFile.name)

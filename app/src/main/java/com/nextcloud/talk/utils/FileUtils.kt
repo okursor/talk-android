@@ -856,6 +856,7 @@ object FileUtils {
             var processedFrames = 0
             var lastProgressUpdate = System.currentTimeMillis()
             val progressUpdateInterval = 500 // Update every 500ms
+            var lastReportedProgress = 0 // Track last reported progress for monotonicity
 
             // Add timeout protection
             val startTime = System.currentTimeMillis()
@@ -985,11 +986,16 @@ object FileUtils {
                                 // Update progress tracking
                                 val currentTime = System.currentTimeMillis()
                                 if (currentTime - lastProgressUpdate >= progressUpdateInterval) {
-                                    val progress = if (estimatedTotalFrames > 0) {
-                                        kotlin.math.min(99, (processedFrames * 100 / estimatedTotalFrames))
+                                    // Video progress: 0-70% of total pipeline (upload will be 80-100%)
+                                    val videoProgress = if (estimatedTotalFrames > 0) {
+                                        (processedFrames * 70 / estimatedTotalFrames)
                                     } else {
-                                        kotlin.math.min(99, processedFrames % 100)
+                                        kotlin.math.min(70, processedFrames % 70)
                                     }
+                                    
+                                    // Ensure monotonic progress (never go backwards)
+                                    val progress = kotlin.math.max(lastReportedProgress, videoProgress)
+                                    lastReportedProgress = progress
 
                                     // Estimate current compressed size
                                     val outputFile = File(outputPath)
@@ -1004,7 +1010,7 @@ object FileUtils {
                                     )
 
                                     lastProgressUpdate = currentTime
-                                    Log.d(TAG, "Progress: $progress% ($processedFrames/$estimatedTotalFrames frames)")
+                                    Log.d(TAG, "Video progress: $progress% ($processedFrames/$estimatedTotalFrames frames)")
                                 }
                             } else if (!muxerStarted && bufferInfo.size != 0) {
                                 Log.w(TAG, "compressVideoWithMediaCodec: Encoder data available but muxer not started yet")
@@ -1171,21 +1177,32 @@ object FileUtils {
                                             val outputFile = File(outputPath)
                                             val currentCompressedSize = if (outputFile.exists()) outputFile.length() else 0L
                                             
-                                            // When video is done and we're only processing audio, show near-completion progress
+                                            // When video is done and we're only processing audio: 70-80% of total pipeline
                                             val progress = if (videoOutputDone) {
-                                                // Video done, audio still processing: 95-99%
-                                                kotlin.math.min(99, 95 + ((currentTime - startTime) % 4000) / 1000).toInt()
+                                                // Video done (0-70%), audio still processing: 70-80%
+                                                // Show steady progress from 70 to 80 based on time
+                                                val audioProcessingTime = (currentTime - startTime).toDouble()
+                                                
+                                                // Estimate: audio typically takes 10-20% of total time
+                                                // Reach 80% within ~3 seconds to avoid long stalls
+                                                val timeFactor = kotlin.math.min(1.0, audioProcessingTime / 3000.0) // normalize to 3s
+                                                val audioProgress = 70 + (timeFactor * 10).toInt()
+                                                kotlin.math.min(80, audioProgress)
                                             } else {
-                                                // Normal progress calculation based on frames
+                                                // Normal progress calculation based on frames (0-70%)
                                                 if (estimatedTotalFrames > 0) {
-                                                    kotlin.math.min(99, (processedFrames * 100 / estimatedTotalFrames))
+                                                    (processedFrames * 70 / estimatedTotalFrames)
                                                 } else {
-                                                    kotlin.math.min(99, processedFrames % 100)
+                                                    kotlin.math.min(70, processedFrames % 70)
                                                 }
                                             }
                                             
+                                            // Ensure monotonic progress (never go backwards)
+                                            val finalProgress = kotlin.math.max(lastReportedProgress, progress)
+                                            lastReportedProgress = finalProgress
+                                            
                                             progressCallback?.onProgressUpdate(
-                                                progress,
+                                                finalProgress,
                                                 processedFrames,
                                                 estimatedTotalFrames,
                                                 originalSizeBytes,
@@ -1193,7 +1210,7 @@ object FileUtils {
                                             )
                                             
                                             lastProgressUpdate = currentTime
-                                            Log.d(TAG, "Audio progress: $progress%")
+                                            Log.d(TAG, "Audio/Finalize progress: $finalProgress%")
                                         }
                                     }
                                 }
@@ -1232,18 +1249,18 @@ object FileUtils {
             Log.d(TAG, "Video compression completed successfully")
             Log.d(TAG, "Muxer started: $muxerStarted, Video track: $videoTrackIndexOutput, Audio track: $audioTrackIndexOutput")
 
-            // Send final 100% progress update before completion callback
+            // Send final 80% progress update before completion callback (upload will be 80-100%)
             val outputFile = File(outputPath)
             val finalCompressedSize = if (outputFile.exists()) outputFile.length() else 0L
             
             progressCallback?.onProgressUpdate(
-                100,
+                80,
                 estimatedTotalFrames,
                 estimatedTotalFrames,
                 originalSizeBytes,
                 finalCompressedSize
             )
-            Log.d(TAG, "Final progress update: 100%")
+            Log.d(TAG, "Final compression progress update: 80% (upload will continue to 100%)")
 
             // Report final completion with actual file sizes
             Log.d(TAG, "Output file exists: ${outputFile.exists()}, size: ${outputFile.length()}")
