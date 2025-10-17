@@ -8,6 +8,7 @@
     <string name="audio_volume_control_title">Anruflautstärke</string>
     <string name="nc_settings_font_scale_title">Schriftgröße</string>
     <string name="nc_settings_font_scale_normal">Normal</string>
+    <string name="nc_settings_font_scale_medium">Mittel</string>
     <string name="nc_settings_font_scale_large">Groß</string>
     <string name="nc_settings_font_scale_very_large">Sehr groß</string>
     <string name= "nc_edit">Bearbeiten</string>

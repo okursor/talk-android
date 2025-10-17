@@ -110,12 +110,14 @@
 
     <array name="font_scale_descriptions">
         <item>@string/nc_settings_font_scale_normal</item>
+        <item>@string/nc_settings_font_scale_medium</item>
         <item>@string/nc_settings_font_scale_large</item>
         <item>@string/nc_settings_font_scale_very_large</item>
     </array>
 
     <array name="font_scale_values">
         <item>1.0</item>
+        <item>1.25</item>
         <item>1.75</item>
         <item>2.0</item>
     </array>
