@@ -21,6 +21,7 @@ import com.google.android.gms.security.ProviderInstaller
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.interfaces.ClosedInterface
 import com.nextcloud.talk.jobs.GetFirebasePushTokenWorker
+import com.nextcloud.talk.jobs.ServiceRestartWorker
 import java.util.concurrent.TimeUnit
 
 @AutoInjector(NextcloudTalkApplication::class)
@@ -66,6 +67,7 @@ class ClosedInterfaceImpl :
         WorkManager.getInstance().enqueue(firebasePushTokenWorker)
 
         setUpPeriodicTokenRefreshFromFCM()
+        setUpPeriodicServiceCheck()
     }
 
     private fun setUpPeriodicTokenRefreshFromFCM() {
@@ -82,6 +84,23 @@ class ClosedInterfaceImpl :
                 "periodicTokenRefreshFromFCM",
                 ExistingPeriodicWorkPolicy.UPDATE,
                 periodicTokenRefreshFromFCM
+            )
+    }
+
+    private fun setUpPeriodicServiceCheck() {
+        val periodicServiceCheck = PeriodicWorkRequest.Builder(
+            ServiceRestartWorker::class.java,
+            15, // Every 15 minutes
+            TimeUnit.MINUTES,
+            5, // With 5 minutes flex
+            TimeUnit.MINUTES
+        ).build()
+
+        WorkManager.getInstance()
+            .enqueueUniquePeriodicWork(
+                "periodicServiceCheck",
+                ExistingPeriodicWorkPolicy.KEEP,
+                periodicServiceCheck
             )
     }
 

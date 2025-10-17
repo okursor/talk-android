@@ -44,6 +44,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.WRITE_CONTACTS" />
     <uses-permission android:name="android.permission.READ_PROFILE" />
@@ -272,6 +276,20 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".receivers.BootCompletedReceiver"
+            android:directBootAware="true"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <receiver android:name=".receivers.DirectReplyReceiver" />
         <receiver android:name=".receivers.MarkAsReadReceiver" />
         <receiver android:name=".receivers.DismissRecordingAvailableReceiver" />
@@ -307,6 +325,16 @@
             android:name=".services.CallForegroundService"
             android:exported="false"
             android:foregroundServiceType="phoneCall|microphone|camera" />
+
+        <service
+            android:name=".services.PersistentConnectionService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="This app needs to stay active to receive incoming calls" />
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"

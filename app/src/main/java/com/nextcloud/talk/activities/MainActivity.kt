@@ -34,6 +34,7 @@ import com.nextcloud.talk.databinding.ActivityMainBinding
 import com.nextcloud.talk.invitation.InvitationsActivity
 import com.nextcloud.talk.lock.LockedActivity
 import com.nextcloud.talk.models.json.conversations.RoomOverall
+import com.nextcloud.talk.services.PersistentConnectionService
 import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.ClosedInterfaceImpl
@@ -261,6 +262,11 @@ class MainActivity :
                 override fun onSuccess(users: List<User>) {
                     if (users.isNotEmpty()) {
                         ClosedInterfaceImpl().setUpPushTokenRegistration()
+                        
+                        // Start persistent connection service for reliable call notifications
+                        Log.d("MainActivity", "Starting PersistentConnectionService, users count: ${users.size}")
+                        PersistentConnectionService.startService(context)
+                        
                         runOnUiThread {
                             openConversationList()
                         }
