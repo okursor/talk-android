@@ -99,10 +99,21 @@ android {
         unitTests.returnDefaultValues = true
     }
 
+    signingConfigs {
+        release {
+            storeFile file('../release-keystore.jks')
+            storePassword 'android'
+            keyAlias 'androidkey'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 
