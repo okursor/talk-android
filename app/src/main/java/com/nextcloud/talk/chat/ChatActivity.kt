@@ -23,12 +23,16 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
 import android.database.Cursor
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.location.LocationManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.util.Size
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
@@ -130,6 +134,7 @@ import com.nextcloud.talk.adapters.messages.SystemMessageViewHolder
 import com.nextcloud.talk.adapters.messages.TalkMessagesListAdapter
 import com.nextcloud.talk.adapters.messages.UnreadNoticeMessageViewHolder
 import com.nextcloud.talk.adapters.messages.VoiceMessageInterface
+import com.nextcloud.talk.adapters.messages.VideoUploadMessageViewHolder
 import com.nextcloud.talk.api.NcApi
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.chat.data.model.ChatMessage
@@ -197,6 +202,7 @@ import com.nextcloud.talk.utils.Mimetype
 import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.ParticipantPermissions
 import com.nextcloud.talk.utils.SpreedFeatures
+import com.nextcloud.talk.utils.ThumbnailCache
 import com.nextcloud.talk.utils.VibrationUtils
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_VOICE_ONLY
@@ -267,6 +273,18 @@ class ChatActivity :
     var active = false
 
     private lateinit var binding: ActivityChatBinding
+    
+    // Mapping uniqueKey (filename_uploadTag) -> (placeholderId, timestamp) für Placeholder-Ersatz
+    private val uploadPlaceholderByKey: MutableMap<String, Pair<String, Long>> = mutableMapOf()
+    
+    // Handler für periodischen Cleanup abgelaufener Placeholders
+    private val cleanupHandler = Handler(Looper.getMainLooper())
+    private val cleanupRunnable = object : Runnable {
+        override fun run() {
+            cleanupExpiredPlaceholders()
+            cleanupHandler.postDelayed(this, 2 * 60 * 1000L) // Alle 2 Minuten
+        }
+    }
 
     @Inject
     lateinit var ncApi: NcApi
@@ -1417,6 +1435,9 @@ class ChatActivity :
         actionBar?.show()
 
         setupSwipeToReply()
+        
+        // ✅ Starte periodischen Cleanup-Handler
+        cleanupHandler.postDelayed(cleanupRunnable, 2 * 60 * 1000L)
 
         binding.unreadMessagesPopup.setOnClickListener {
             binding.messagesListView.smoothScrollToPosition(0)
@@ -1599,6 +1620,16 @@ class ChatActivity :
         messageHolders.setOutcomingTextConfig(
             OutcomingTextMessageViewHolder::class.java,
             R.layout.item_custom_outcoming_text_message
+        )
+
+        // Register VideoUploadMessageViewHolder BEFORE Image configs to give it higher priority
+        messageHolders.registerContentType(
+            CONTENT_TYPE_VIDEO_UPLOAD,
+            VideoUploadMessageViewHolder::class.java,
+            R.layout.item_custom_outcoming_video_upload_message,
+            VideoUploadMessageViewHolder::class.java,
+            R.layout.item_custom_outcoming_video_upload_message,
+            this
         )
 
         messageHolders.setIncomingImageConfig(
@@ -2729,6 +2760,11 @@ class ChatActivity :
         if (mentionAutocomplete != null && mentionAutocomplete!!.isPopupShowing) {
             mentionAutocomplete?.dismissPopup()
         }
+        
+        // ✅ Stoppe periodischen Handler und führe finalen Cleanup durch
+        cleanupHandler.removeCallbacks(cleanupRunnable)
+        cleanupExpiredPlaceholders()
+        
         adapter = null
     }
 
@@ -3046,7 +3082,11 @@ class ChatActivity :
                 chatMessage.isFormerOneToOneConversation =
                     (currentConversation?.type == ConversationEnums.ConversationType.FORMER_ONE_TO_ONE)
                 Log.d(TAG, "chatMessage to add:" + chatMessage.message)
-                it.addToStart(chatMessage, scrollToBottom)
+                
+                // ✅ NEU: Versuche Placeholder zu ersetzen statt neue Message hinzuzufügen
+                if (!tryReplacePlaceholderWithServerMessage(chatMessage)) {
+                    it.addToStart(chatMessage, scrollToBottom)
+                }
             }
         }
 
@@ -3097,7 +3137,12 @@ class ChatActivity :
         }
 
         if (adapter != null) {
-            adapter?.addToEnd(chatMessageList, false)
+            // ✅ NEU: Auch hier Replace versuchen vor addToEnd
+            for (message in chatMessageList) {
+                if (!tryReplacePlaceholderWithServerMessage(message)) {
+                    adapter?.addToEnd(listOf(message), false)
+                }
+            }
         }
         scrollToRequestedMessageIfNeeded()
     }
@@ -4295,8 +4340,8 @@ class ChatActivity :
         return isUserAllowedByPrivileges
     }
 
-    override fun hasContentFor(message: ChatMessage, type: Byte): Boolean =
-        when (type) {
+    override fun hasContentFor(message: ChatMessage, type: Byte): Boolean {
+        val result = when (type) {
             CONTENT_TYPE_LOCATION -> message.hasGeoLocation()
             CONTENT_TYPE_VOICE_MESSAGE -> message.isVoiceMessage
             CONTENT_TYPE_POLL -> message.isPoll()
@@ -4305,9 +4350,15 @@ class ChatActivity :
             CONTENT_TYPE_UNREAD_NOTICE_MESSAGE -> message.id == UNREAD_MESSAGES_MARKER_ID.toString()
             CONTENT_TYPE_CALL_STARTED -> message.id == "-2"
             CONTENT_TYPE_DECK_CARD -> message.isDeckCard()
+            CONTENT_TYPE_VIDEO_UPLOAD -> message.isVideoUpload()
 
             else -> false
         }
+        if (type == CONTENT_TYPE_VIDEO_UPLOAD) {
+            // Debug: Check if video upload content type is being processed
+        }
+        return result
+    }
 
     private fun processMostRecentMessage(recent: ChatMessage) {
         when (recent.systemMessageType) {
@@ -4479,13 +4530,7 @@ class ChatActivity :
     }
 
     private fun logConversationInfos(methodName: String) {
-        Log.d(TAG, " |-----------------------------------------------")
-        Log.d(TAG, " | method: $methodName")
-        Log.d(TAG, " | ChatActivity: " + System.identityHashCode(this).toString())
-        Log.d(TAG, " | roomToken: $roomToken")
-        Log.d(TAG, " | currentConversation?.displayName: ${currentConversation?.displayName}")
-        Log.d(TAG, " | sessionIdAfterRoomJoined: $sessionIdAfterRoomJoined")
-        Log.d(TAG, " |-----------------------------------------------")
+        // Debug logging removed for security
     }
 
     fun shareMessageText(message: String) {
@@ -4523,15 +4568,584 @@ class ChatActivity :
         replyToMessageId: Int? = null,
         displayName: String
     ) {
-        chatViewModel.uploadFile(
-            fileUri,
-            isVoiceMessage,
-            caption,
-            roomToken,
-            replyToMessageId,
-            displayName
-        )
+        // Check if it's a video file that needs compression with live updates
+        val uri = android.net.Uri.parse(fileUri)
+        if (com.nextcloud.talk.utils.FileUtils.isVideoFile(this, uri)) {
+            // Create placeholder message immediately
+            createVideoUploadPlaceholder(fileUri, caption, roomToken, replyToMessageId, displayName)
+            
+            // Use the existing, working upload system
+            chatViewModel.uploadFile(
+                this,
+                fileUri,
+                isVoiceMessage,
+                caption,
+                roomToken,
+                replyToMessageId,
+                displayName
+            )
+        } else {
+            // Use existing upload logic for other files
+            chatViewModel.uploadFile(
+                this,
+                fileUri,
+                isVoiceMessage,
+                caption,
+                roomToken,
+                replyToMessageId,
+                displayName
+            )
+        }
         cancelReply()
+    }
+
+    /**
+     * Versucht einen Upload-Placeholder mit der Server-Message zu ersetzen.
+     * Matching erfolgt über Dateinamen (selectedIndividualHashMap["name"]).
+     * Versucht zuerst exact match mit uploadTag, dann Fallback auf nur Filename.
+     * 
+     * @return true wenn Placeholder gefunden und ersetzt wurde, false sonst
+     */
+    private fun tryReplacePlaceholderWithServerMessage(serverMessage: ChatMessage): Boolean {
+        // Server-Message muss ein File-Attachment haben
+        val filename = serverMessage.selectedIndividualHashMap?.get("name") ?: return false
+        
+        // Versuche zuerst alle Keys mit diesem Filename zu finden
+        // (kann mehrere sein bei gleichzeitigen Uploads derselben Datei)
+        val matchingKeys = uploadPlaceholderByKey.keys.filter { it.startsWith(filename + "_") }
+        
+        // Nehme den ältesten Match (FIFO)
+        val keyToUse = matchingKeys.minByOrNull { key ->
+            uploadPlaceholderByKey[key]?.second ?: Long.MAX_VALUE
+        }
+        
+        if (keyToUse == null) {
+            Log.d(TAG, "⚠️ No placeholder mapping found for filename=$filename")
+            return false
+        }
+        
+        // Entferne aus Map und hole Placeholder-Info
+        val placeholderInfo = uploadPlaceholderByKey.remove(keyToUse) ?: return false
+        val (placeholderId, _) = placeholderInfo
+        
+        // Finde Position im Adapter
+        val messageIndex = adapter?.items?.indexOfFirst { wrapper ->
+            wrapper.item is ChatMessage && 
+            (wrapper.item as ChatMessage).jsonMessageId.toString() == placeholderId
+        } ?: -1
+        
+        if (messageIndex >= 0) {
+            // ✅ IN-PLACE REPLACEMENT: Position bleibt identisch!
+            Log.d(TAG, "✅ Replacing placeholder at index $messageIndex (id=$placeholderId) with server message (id=${serverMessage.id}, filename=$filename)")
+            
+            // Setze notwendige Eigenschaften für die Server-Message
+            serverMessage.activeUser = conversationUser
+            serverMessage.isOneToOneConversation = 
+                currentConversation?.type == ConversationEnums.ConversationType.ROOM_TYPE_ONE_TO_ONE_CALL
+            serverMessage.isFormerOneToOneConversation = 
+                currentConversation?.type == ConversationEnums.ConversationType.FORMER_ONE_TO_ONE
+            
+            // Ersetze das Item im Adapter
+            adapter?.items?.get(messageIndex)?.item = serverMessage
+            adapter?.notifyItemChanged(messageIndex)
+            
+            return true
+        } else {
+            Log.w(TAG, "⚠️ Placeholder id=$placeholderId not found in adapter for key=$keyToUse")
+        }
+        
+        return false
+    }
+    
+    /**
+     * Prüft und entfernt abgelaufene Placeholder (wenn Server-Message nach Timeout nicht eintraf).
+     * Wird periodisch aufgerufen (alle 2 Minuten).
+     */
+    private fun cleanupExpiredPlaceholders() {
+        val now = System.currentTimeMillis()
+        val timeout = 10 * 60 * 1000L // 10 Minuten
+        
+        val expiredEntries = uploadPlaceholderByKey.filter { (_, info) ->
+            val (_, timestamp) = info
+            now - timestamp > timeout
+        }
+        
+        for ((key, info) in expiredEntries) {
+            val (placeholderId, _) = info
+            Log.w(TAG, "⏰ Placeholder timeout for key=$key, id=$placeholderId")
+            
+            // Markiere Placeholder als Fehler statt zu löschen (damit User sieht was passiert ist)
+            updatePlaceholderMessage(placeholderId) { message ->
+                message.uploadState = com.nextcloud.talk.models.UploadState.FAILED
+                message.uploadErrorMessage = "Upload abgeschlossen, aber Nachricht vom Server nicht empfangen"
+            }
+            
+            uploadPlaceholderByKey.remove(key)
+        }
+    }
+
+    /**
+     * Prefetch and cache video thumbnail BEFORE transcoding starts.
+     * This avoids race conditions with the transcoder accessing the same file.
+     */
+    private fun prefetchVideoThumbnail(videoUri: Uri) {
+        val key = videoUri.toString()
+        
+        // Already cached?
+        if (ThumbnailCache.get(key) != null) {
+            Log.d(TAG, "Thumbnail already cached for $key")
+            return
+        }
+
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            var thumbnail: Bitmap? = null
+            
+            try {
+                // Try MediaStore thumbnail API (fast, uses provider-optimized thumbnails)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        thumbnail = contentResolver.loadThumbnail(videoUri, Size(320, 180), null)
+                        Log.d(TAG, "✅ Loaded MediaStore thumbnail for $key")
+                    } catch (e: Exception) {
+                        Log.d(TAG, "MediaStore thumbnail not available, falling back to extraction", e)
+                    }
+                }
+                
+                // Fallback: extract frame with MediaMetadataRetriever
+                if (thumbnail == null) {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(this@ChatActivity, videoUri)
+                        thumbnail = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        Log.d(TAG, "✅ Extracted thumbnail via MediaMetadataRetriever for $key")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to extract thumbnail", e)
+                    } finally {
+                        try {
+                            retriever.release()
+                        } catch (_: Exception) {}
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Thumbnail prefetch failed for $key", e)
+            }
+            
+            // Cache the thumbnail if we got one
+            if (thumbnail != null) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    ThumbnailCache.put(key, thumbnail)
+                    Log.d(TAG, "📦 Cached thumbnail for $key")
+                }
+            }
+        }
+    }
+
+    /**
+     * Data class to hold extracted video metadata
+     */
+    private data class VideoMetadata(
+        val duration: Long?, // milliseconds
+        val fileSize: Long?  // bytes
+    )
+
+    /**
+     * Extracts video metadata (duration, file size) for detail display.
+     * Prefers fast MediaStore query (same source as thumbnail cache), falls back to MediaMetadataRetriever.
+     */
+    private fun extractVideoMetadata(videoUri: Uri): VideoMetadata {
+        var duration: Long? = null
+        var fileSize: Long? = null
+        
+        // Try MediaStore first (fast, cached, same source as thumbnail)
+        if (videoUri.scheme == "content") {
+            try {
+                contentResolver.query(
+                    videoUri,
+                    arrayOf(
+                        android.provider.MediaStore.Video.Media.DURATION,
+                        android.provider.MediaStore.Video.Media.SIZE
+                    ),
+                    null,
+                    null,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val durationIdx = cursor.getColumnIndex(android.provider.MediaStore.Video.Media.DURATION)
+                        val sizeIdx = cursor.getColumnIndex(android.provider.MediaStore.Video.Media.SIZE)
+                        
+                        if (durationIdx >= 0) {
+                            duration = cursor.getLong(durationIdx)
+                        }
+                        if (sizeIdx >= 0) {
+                            fileSize = cursor.getLong(sizeIdx)
+                        }
+                        
+                        Log.d(TAG, "✅ MediaStore metadata: duration=${duration}ms, size=$fileSize bytes")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "MediaStore query failed, trying MediaMetadataRetriever fallback", e)
+            }
+        }
+        
+        // Fallback: MediaMetadataRetriever (for file:// URIs or if MediaStore failed)
+        if (duration == null) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(this, videoUri)
+                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                duration = durationStr?.toLongOrNull()
+                Log.d(TAG, "📹 MediaMetadataRetriever duration: ${duration}ms")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to extract video duration", e)
+            } finally {
+                try {
+                    retriever.release()
+                } catch (_: Exception) {}
+            }
+        }
+        
+        // Get file size if not from MediaStore
+        if (fileSize == null) {
+            try {
+                contentResolver.openFileDescriptor(videoUri, "r")?.use { pfd ->
+                    fileSize = pfd.statSize
+                    Log.d(TAG, "📹 File descriptor size: $fileSize bytes")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to get file size", e)
+            }
+        }
+        
+        return VideoMetadata(duration, fileSize)
+    }
+
+    /**
+     * Gets the compression level from user settings
+     * TODO: Replace with actual settings lookup when implemented
+     */
+    /**
+     * Gets the compression level from user settings.
+     * Preference values match enum names: "none", "light", "medium", "strong"
+     */
+    private fun getCompressionLevelFromSettings(): com.nextcloud.talk.chat.data.model.ChatMessage.CompressionLevel {
+        val value = appPreferences.getVideoCompressionLevel()
+        
+        Log.d(TAG, "getCompressionLevelFromSettings: value from DataStore='$value'")
+        
+        return try {
+            // Parse enum by name (preference values are lowercase, enum names are uppercase)
+            com.nextcloud.talk.chat.data.model.ChatMessage.CompressionLevel.valueOf(value.uppercase())
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "Unknown video_compression_level='$value', defaulting to MEDIUM", e)
+            com.nextcloud.talk.chat.data.model.ChatMessage.CompressionLevel.MEDIUM
+        }
+    }
+
+
+    private fun createVideoUploadPlaceholder(
+        fileUri: String,
+        caption: String = "",
+        roomToken: String = "",
+        replyToMessageId: Int? = null,
+        displayName: String
+    ) {
+        val videoUri = android.net.Uri.parse(fileUri)
+        
+        // ✅ PREFETCH THUMBNAIL FIRST (before transcoding starts!)
+        prefetchVideoThumbnail(videoUri)
+        
+        // ✅ EXTRACT VIDEO METADATA for detail line
+        val metadata = extractVideoMetadata(videoUri)
+        val compressionLevel = getCompressionLevelFromSettings()
+        
+        android.util.Log.d(TAG, "createVideoUploadPlaceholder: metadata=$metadata, compressionLevel=$compressionLevel")
+        
+        // Create placeholder message immediately with ALL required properties
+        val placeholderMessage = com.nextcloud.talk.chat.data.model.ChatMessage().apply {
+            jsonMessageId = System.currentTimeMillis().toInt()
+            
+            // ✅ KRITISCH: actorType MUSS "users" sein für OUTGOING messages!
+            // Der Adapter prüft user.id = "$actorType/$actorId" um incoming/outgoing zu bestimmen
+            actorType = "users"
+            actorId = conversationUser?.userId ?: "unknown"
+            actorDisplayName = conversationUser?.displayName ?: "You"  
+            
+            timestamp = System.currentTimeMillis()
+            message = if (caption.isNotEmpty()) caption else "📹 Video wird komprimiert..."
+            activeUser = conversationUser
+            
+            // ✅ KRITISCH: localVideoUri MUSS VOR addToStart() gesetzt sein!
+            // Dies bestimmt ob VideoUploadMessageViewHolder verwendet wird
+            localVideoUri = videoUri
+            
+            // Set upload-specific properties - this will make isVideoUpload() return true
+            uploadState = com.nextcloud.talk.models.UploadState.TRANSCODING
+            transcodeProgress = 0
+            uploadProgress = 0
+            compressionStartTime = System.currentTimeMillis()
+            
+            // ✅ Set video metadata for detail display
+            videoDuration = metadata.duration
+            this.compressionLevel = compressionLevel
+            estimatedFileSize = metadata.fileSize
+            
+            // Get original file size
+            try {
+                val inputStream = contentResolver.openInputStream(videoUri)
+                originalFileSize = inputStream?.available()?.toLong() ?: 0L
+                inputStream?.close()
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Could not get file size", e)
+                originalFileSize = 0L
+            }
+            
+            isOneToOneConversation = currentConversation?.type == 
+                com.nextcloud.talk.models.json.conversations.ConversationEnums.ConversationType.ROOM_TYPE_ONE_TO_ONE_CALL
+            isFormerOneToOneConversation = currentConversation?.type == 
+                com.nextcloud.talk.models.json.conversations.ConversationEnums.ConversationType.FORMER_ONE_TO_ONE
+        }
+        
+        // Debug logging to verify all properties are set correctly
+        android.util.Log.d(TAG, "📝 Creating video upload placeholder:")
+        android.util.Log.d(TAG, "   actorType: ${placeholderMessage.actorType}")
+        android.util.Log.d(TAG, "   actorId: ${placeholderMessage.actorId}")
+        android.util.Log.d(TAG, "   user.id (computed): ${placeholderMessage.user.id}")
+        android.util.Log.d(TAG, "   uploadState: ${placeholderMessage.uploadState}")
+        android.util.Log.d(TAG, "   localVideoUri: ${placeholderMessage.localVideoUri}")
+        android.util.Log.d(TAG, "   isVideoUpload(): ${placeholderMessage.isVideoUpload()}")
+        android.util.Log.d(TAG, "   getCalculateMessageType(): ${placeholderMessage.getCalculateMessageType()}")
+        
+        // ✅ Speichere Mapping (filename_uploadTag) -> (placeholderId, timestamp) für späteren Ersatz
+        // Robustes Key-Matching: filename + unique uploadTag für mehrere parallele Uploads derselben Datei
+        try {
+            val filename = com.nextcloud.talk.utils.FileUtils.getFileName(videoUri, this)
+            val placeholderId = placeholderMessage.jsonMessageId.toString()
+            val timestamp = System.currentTimeMillis()
+            val uploadTag = "upload_$fileUri"
+            val uniqueKey = "${filename}_${uploadTag.hashCode()}" // Eindeutiger Key
+            
+            uploadPlaceholderByKey[uniqueKey] = Pair(placeholderId, timestamp)
+            android.util.Log.d(TAG, "📎 Mapped placeholder: key=$uniqueKey -> id=$placeholderId")
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "⚠️ Could not map placeholder filename", e)
+        }
+        
+        // Add message to adapter - hasContentFor() will be called here
+        adapter?.addToStart(placeholderMessage, true)
+        binding.messagesListView.scrollToPosition(0)
+        
+        // Log ViewHolder type after adding
+        binding.messagesListView.post {
+            val viewHolder = binding.messagesListView.findViewHolderForAdapterPosition(0)
+            android.util.Log.d(TAG, "🎭 ViewHolder type at position 0: ${viewHolder?.javaClass?.simpleName}")
+        }
+        
+        // Observe WorkManager progress for this upload
+        observeUploadProgress(placeholderMessage.jsonMessageId.toString(), fileUri)
+    }
+    
+    private fun observeUploadProgress(messageId: String, fileUri: String) {
+        // Get WorkManager instance
+        val workManager = androidx.work.WorkManager.getInstance(this)
+        
+        // Use the unique tag for this specific upload
+        val uploadTag = "upload_$fileUri"
+        android.util.Log.d(TAG, "🔍 Observing upload with tag: $uploadTag for message: $messageId")
+        
+        // Track if we've seen a RUNNING state - to ignore stale SUCCEEDED states
+        var hasSeenRunning = false
+        
+        // Observe the specific upload worker for this file
+        workManager.getWorkInfosByTagLiveData(uploadTag)
+            .observe(this) { workInfos ->
+                android.util.Log.d(TAG, "📦 WorkInfo update received, count: ${workInfos?.size ?: 0}")
+                
+                workInfos?.firstOrNull()?.let { workInfo ->
+                    android.util.Log.d(TAG, "⚙️ WorkInfo state: ${workInfo.state}, messageId: $messageId, hasSeenRunning: $hasSeenRunning")
+                    
+                    when {
+                        workInfo.state == androidx.work.WorkInfo.State.RUNNING -> {
+                            hasSeenRunning = true
+                            
+                            // Update progress from WorkManager data
+                            val progress = workInfo.progress
+                            val status = progress.getString("status")
+                            val progressPercent = progress.getInt("progress", 0)
+                            val currentSize = progress.getLong("currentSizeBytes", 0L)
+                            val originalSize = progress.getLong("originalSizeBytes", 0L)
+                            
+                            android.util.Log.v(TAG, "📊 Progress update: status=$status, progress=$progressPercent%, message=$messageId")
+                            
+                            updatePlaceholderMessage(messageId) { message ->
+                                when (status) {
+                                    "compressing" -> {
+                                        android.util.Log.d(TAG, "🎥 Updating TRANSCODING: $progressPercent%")
+                                        message.uploadState = com.nextcloud.talk.models.UploadState.TRANSCODING
+                                        message.transcodeProgress = progressPercent
+                                        message.currentCompressedSize = currentSize
+                                        message.originalFileSize = originalSize
+                                        
+                                        // Calculate compression ratio
+                                        if (originalSize > 0 && currentSize > 0) {
+                                            message.compressionRatio = 
+                                                ((originalSize - currentSize) * 100 / originalSize).toInt()
+                                        }
+                                    }
+                                    "compression_completed" -> {
+                                        android.util.Log.d(TAG, "✅ Compression completed: 80% (upload will be 80-100%)")
+                                        message.uploadState = com.nextcloud.talk.models.UploadState.TRANSCODING
+                                        message.transcodeProgress = 80  // Compression ends at 80%, upload will continue to 100%
+                                        val compressedSize = progress.getLong("compressedSizeBytes", 0L)
+                                        message.currentCompressedSize = compressedSize
+                                        message.finalCompressedSize = compressedSize
+                                        message.originalFileSize = originalSize
+                                        
+                                        // Calculate final compression ratio
+                                        if (originalSize > 0 && compressedSize > 0) {
+                                            message.compressionRatio = 
+                                                ((originalSize - compressedSize) * 100 / originalSize).toInt()
+                                        }
+                                    }
+                                    "uploading" -> {
+                                        android.util.Log.d(TAG, "⬆️ Updating UPLOADING: $progressPercent%")
+                                        message.uploadState = com.nextcloud.talk.models.UploadState.UPLOADING
+                                        message.uploadProgress = progressPercent
+                                        
+                                        // Keep transcode progress at final value (80%)
+                                        if (message.transcodeProgress < 80) {
+                                            message.transcodeProgress = 80
+                                        }
+                                        
+                                        message.finalCompressedSize = currentSize
+                                    }
+                                }
+                            }
+                        }
+                        workInfo.state.isFinished && hasSeenRunning -> {
+                            // Only handle finished states if we've seen the worker actually running
+                            // This prevents reacting to stale/old WorkInfo from previous uploads
+                            if (workInfo.state == androidx.work.WorkInfo.State.SUCCEEDED) {
+                                android.util.Log.d(TAG, "✅ Upload completed successfully, removing placeholder: $messageId")
+                                removeVideoUploadPlaceholder(messageId)
+                            } else {
+                                // Upload failed
+                                android.util.Log.e(TAG, "❌ Upload failed for message: $messageId")
+                                updatePlaceholderMessage(messageId) { message ->
+                                    message.uploadState = com.nextcloud.talk.models.UploadState.FAILED
+                                    message.uploadErrorMessage = "Upload fehlgeschlagen"
+                                }
+                            }
+                        }
+                        workInfo.state.isFinished && !hasSeenRunning -> {
+                            // Ignore stale SUCCEEDED/FAILED states from previous uploads
+                            android.util.Log.w(TAG, "⚠️ Ignoring stale ${workInfo.state} state (haven't seen RUNNING yet)")
+                        }
+                    }
+                }
+            }
+    }
+    
+    private fun removeVideoUploadPlaceholder(messageId: String) {
+        adapter?.items?.let { items ->
+            val messageIndex = items.indexOfFirst { wrapper ->
+                wrapper.item is com.nextcloud.talk.chat.data.model.ChatMessage && 
+                (wrapper.item as com.nextcloud.talk.chat.data.model.ChatMessage).jsonMessageId.toString() == messageId
+            }
+            
+            if (messageIndex != -1) {
+                val message = items[messageIndex].item as com.nextcloud.talk.chat.data.model.ChatMessage
+                
+                // ✅ Cleanup Mapping wenn Placeholder entfernt wird
+                // Entferne alle Keys die zu diesem Placeholder gehören
+                message.localVideoUri?.let { uri ->
+                    try {
+                        val filename = com.nextcloud.talk.utils.FileUtils.getFileName(uri, this)
+                        val keysToRemove = uploadPlaceholderByKey.keys.filter { 
+                            it.startsWith(filename + "_") && 
+                            uploadPlaceholderByKey[it]?.first == messageId 
+                        }
+                        keysToRemove.forEach { key ->
+                            uploadPlaceholderByKey.remove(key)
+                            android.util.Log.d(TAG, "🧹 Removed placeholder mapping for key=$key")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w(TAG, "Could not cleanup placeholder mapping", e)
+                    }
+                }
+                
+                // First, mark as completed so user sees success state briefly
+                updatePlaceholderMessage(messageId) { msg ->
+                    msg.uploadState = com.nextcloud.talk.models.UploadState.COMPLETED
+                }
+                
+                // ✅ Kürzere Delay für schnellere UX (0.5s statt 1.5s)
+                binding.messagesListView.postDelayed({
+                    android.util.Log.d(TAG, "Removing video upload placeholder at index: $messageIndex")
+                    adapter?.deleteById(messageId)
+                }, 500) // 0.5 seconds delay
+            }
+        }
+    }
+
+    private fun updatePlaceholderMessage(messageId: String, transform: (com.nextcloud.talk.chat.data.model.ChatMessage) -> Unit) {
+        adapter?.items?.let { items ->
+            val messageIndex = items.indexOfFirst { wrapper ->
+                wrapper.item is com.nextcloud.talk.chat.data.model.ChatMessage && 
+                (wrapper.item as com.nextcloud.talk.chat.data.model.ChatMessage).jsonMessageId.toString() == messageId
+            }
+            
+            android.util.Log.d(TAG, "🔄 updatePlaceholderMessage: messageId=$messageId, found at index=$messageIndex")
+            
+            if (messageIndex != -1) {
+                val wrapper = items[messageIndex]
+                if (wrapper.item is com.nextcloud.talk.chat.data.model.ChatMessage) {
+                    val message = wrapper.item as com.nextcloud.talk.chat.data.model.ChatMessage
+                    
+                    // Update the message data
+                    transform(message)
+                    
+                    android.util.Log.d(TAG, "� Message data updated: uploadState=${message.uploadState}, transcodeProgress=${message.transcodeProgress}%, uploadProgress=${message.uploadProgress}%")
+                    
+                    // ✅ WICHTIG: Doppelter post() für garantierte UI-Updates
+                    binding.messagesListView.post {
+                        // First: Notify adapter that data changed
+                        adapter?.notifyItemChanged(messageIndex)
+                        android.util.Log.d(TAG, "🔔 Notifying adapter of change at index $messageIndex")
+                        
+                        // Second: After layout is complete, find and update ViewHolder directly
+                        binding.messagesListView.post {
+                            val viewHolder = binding.messagesListView
+                                .findViewHolderForAdapterPosition(messageIndex)
+                            
+                            android.util.Log.d(TAG, "🎭 ViewHolder found at position $messageIndex: ${viewHolder?.javaClass?.simpleName}")
+                            
+                            if (viewHolder is com.nextcloud.talk.adapters.messages.VideoUploadMessageViewHolder) {
+                                android.util.Log.d(TAG, "✨ Directly calling onBind() on VideoUploadMessageViewHolder")
+                                viewHolder.onBind(message)
+                            } else {
+                                android.util.Log.w(TAG, "⚠️ ViewHolder is not VideoUploadMessageViewHolder! Type: ${viewHolder?.javaClass?.simpleName}")
+                                android.util.Log.w(TAG, "   Message uploadState: ${message.uploadState}")
+                                android.util.Log.w(TAG, "   Message isVideoUpload(): ${message.isVideoUpload()}")
+                                android.util.Log.w(TAG, "   Message localVideoUri: ${message.localVideoUri}")
+                            }
+                        }
+                    }
+                }
+            } else {
+                android.util.Log.w(TAG, "⚠️ Message not found in adapter: $messageId")
+            }
+        }
+    }
+    
+    fun cancelVideoUpload(messageId: String) {
+        updatePlaceholderMessage(messageId) { message ->
+            message.uploadState = com.nextcloud.talk.models.UploadState.CANCELLED
+            message.uploadErrorMessage = "Upload abgebrochen"
+        }
+        
+        // TODO: Actually cancel the compression/upload process
+        android.util.Log.d(TAG, "Video upload cancelled for message: $messageId")
     }
 
     fun cancelReply() {
@@ -4556,6 +5170,7 @@ class ChatActivity :
         private const val CONTENT_TYPE_POLL: Byte = 6
         private const val CONTENT_TYPE_LINK_PREVIEW: Byte = 7
         private const val CONTENT_TYPE_DECK_CARD: Byte = 8
+        private const val CONTENT_TYPE_VIDEO_UPLOAD: Byte = 9
         private const val UNREAD_MESSAGES_MARKER_ID = -1
         private const val GET_ROOM_INFO_DELAY_NORMAL: Long = 30000
         private const val GET_ROOM_INFO_DELAY_LOBBY: Long = 5000

@@ -12,6 +12,7 @@ import com.stfalcon.chatkit.commons.ImageLoader;
 import com.stfalcon.chatkit.commons.ViewHolder;
 import com.stfalcon.chatkit.commons.models.IMessage;
 import com.stfalcon.chatkit.messages.MessageHolders;
+// ...keep original imports
 import com.stfalcon.chatkit.messages.MessagesListAdapter;
 
 import java.util.List;
@@ -79,8 +80,26 @@ public class TalkMessagesListAdapter<M extends IMessage> extends MessagesListAda
         } else if (holder instanceof OutcomingPollMessageViewHolder holderInstance) {
             holderInstance.assignCommonMessageInterface(chatActivity);
             holderInstance.adjustIfNoteToSelf(chatActivity.getCurrentConversation());
+
+        } else if (holder instanceof VideoUploadMessageViewHolder holderInstance) {
+            holderInstance.assignCommonMessageInterface(chatActivity);
+            holderInstance.adjustIfNoteToSelf(chatActivity.getCurrentConversation());
         }
 
         super.onBindViewHolder(holder, position);
+    }
+
+    @Override
+    public void onViewRecycled(com.stfalcon.chatkit.commons.ViewHolder holder) {
+        // If a VideoUploadMessageViewHolder is recycled, ensure we cancel thumbnail loading
+        if (holder instanceof VideoUploadMessageViewHolder) {
+            try {
+                ((VideoUploadMessageViewHolder) holder).onRecycled();
+            } catch (Exception e) {
+                // log and ignore
+                android.util.Log.w("TalkMessagesListAdapter", "Error while recycling VideoUploadMessageViewHolder", e);
+            }
+        }
+        super.onViewRecycled(holder);
     }
 }

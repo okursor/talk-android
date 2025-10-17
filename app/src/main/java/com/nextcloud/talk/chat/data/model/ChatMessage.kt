@@ -16,6 +16,7 @@ import com.nextcloud.talk.R
 import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedApplication
 import com.nextcloud.talk.data.database.model.SendStatus
 import com.nextcloud.talk.data.user.model.User
+import com.nextcloud.talk.models.UploadState
 import com.nextcloud.talk.models.json.chat.ChatUtils.Companion.getParsedMessage
 import com.nextcloud.talk.models.json.chat.ReadStatus
 import com.nextcloud.talk.models.json.converters.EnumSystemMessageTypeConverter
@@ -130,7 +131,41 @@ data class ChatMessage(
 
     var sendStatus: SendStatus? = null,
 
-    var silent: Boolean = false
+    var silent: Boolean = false,
+
+    // Video upload progress fields
+    var uploadState: com.nextcloud.talk.models.UploadState = com.nextcloud.talk.models.UploadState.NONE,
+    
+    var transcodeProgress: Int = 0,
+    
+    var uploadProgress: Int = 0,
+    
+    var processedFrames: Int = 0,
+    
+    var totalFrames: Int = 0,
+    
+    var originalFileSize: Long = 0L,
+    
+    var currentCompressedSize: Long = 0L,
+    
+    var finalCompressedSize: Long = 0L,
+    
+    var compressionRatio: Int = 0,
+    
+    var uploadErrorMessage: String? = null,
+    
+    var localVideoUri: android.net.Uri? = null,
+    
+    var tempCompressedFile: java.io.File? = null,
+    
+    var compressionStartTime: Long = 0L,
+    
+    // Video metadata for detail display
+    var videoDuration: Long? = null,
+    
+    var compressionLevel: CompressionLevel? = null,
+    
+    var estimatedFileSize: Long? = null
 
 ) : MessageContentType,
     MessageContentType.Image {
@@ -195,6 +230,28 @@ data class ChatMessage(
         return false
     }
 
+    fun isVideoUpload(): Boolean {
+        // Only treat as video upload when there's an active upload state
+        // AND we either have a localVideoUri (it's an outgoing video) or
+        // the messageParameters contain a file entry with a video mime type.
+        if (uploadState == UploadState.NONE) return false
+
+        if (localVideoUri != null) return true
+
+        if (messageParameters != null && messageParameters!!.size > 0) {
+            for ((_, individualHashMap) in messageParameters!!) {
+                if (isHashMapEntryEqualTo(individualHashMap, "type", "file")) {
+                    val mime = individualHashMap["mime"]
+                    if (!mime.isNullOrEmpty() && mime.startsWith("video")) {
+                        return true
+                    }
+                }
+            }
+        }
+
+        return false
+    }
+
     @Suppress("ReturnCount")
     fun isLinkPreview(): Boolean {
         if (CapabilitiesUtil.isLinkPreviewAvailable(activeUser!!)) {
@@ -224,6 +281,12 @@ data class ChatMessage(
 
     @Suppress("Detekt.NestedBlockDepth")
     override fun getImageUrl(): String? {
+        // Return null for video uploads to prevent Image handler from being used
+        // This ensures VideoUploadMessageViewHolder is used instead of OutcomingPreviewMessageViewHolder
+        if (isVideoUpload()) {
+            return null
+        }
+        
         if (messageParameters != null && messageParameters!!.size > 0) {
             for ((_, individualHashMap) in messageParameters!!) {
                 if (isHashMapEntryEqualTo(individualHashMap, "type", "file")) {
@@ -259,6 +322,8 @@ data class ChatMessage(
             MessageType.SYSTEM_MESSAGE
         } else if (isVoiceMessage) {
             MessageType.VOICE_MESSAGE
+        } else if (isVideoUpload()) {
+            MessageType.VIDEO_UPLOAD_MESSAGE
         } else if (hasFileAttachment()) {
             MessageType.SINGLE_NC_ATTACHMENT_MESSAGE
         } else if (hasGeoLocation()) {
@@ -363,7 +428,8 @@ data class ChatMessage(
         SINGLE_NC_GEOLOCATION_MESSAGE,
         POLL_MESSAGE,
         VOICE_MESSAGE,
-        DECK_CARD
+        DECK_CARD,
+        VIDEO_UPLOAD_MESSAGE
     }
 
     /**
@@ -434,6 +500,13 @@ data class ChatMessage(
         FEDERATED_USER_REMOVED,
         PHONE_ADDED,
         THREAD_CREATED
+    }
+
+    enum class CompressionLevel(val labelResId: Int) {
+        NONE(com.nextcloud.talk.R.string.nc_video_compression_none),
+        LIGHT(com.nextcloud.talk.R.string.nc_video_compression_light),
+        MEDIUM(com.nextcloud.talk.R.string.nc_video_compression_medium),
+        STRONG(com.nextcloud.talk.R.string.nc_video_compression_strong)
     }
 
     companion object {

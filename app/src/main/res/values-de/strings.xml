@@ -308,6 +308,16 @@
     <string name="nc_image_compression_strong">Stark</string>
     <string name="nc_image_compression_strong_description">Merkliche Größenreduktion für schnelles Teilen (max. 1280x1280, 80% Qualität)</string>
     
+    <!-- Video compression levels -->
+    <string name="nc_video_compression_none">Keine</string>
+    <string name="nc_video_compression_none_description">Originalvideos ohne Kompression hochladen</string>
+    <string name="nc_video_compression_light">Leicht</string>
+    <string name="nc_video_compression_light_description">HD-Qualität mit moderater Größenreduktion (720p, 2000 kbps)</string>
+    <string name="nc_video_compression_medium">Mittel</string>
+    <string name="nc_video_compression_medium_description">Gute Balance zwischen Qualität und Größe (480p, 1000 kbps)</string>
+    <string name="nc_video_compression_strong">Stark</string>
+    <string name="nc_video_compression_strong_description">Maximale Größenreduktion für schnelles Teilen (360p, 500 kbps)</string>
+    
     <string name="nc_important_conversation">Wichtige Unterhaltung</string>
     <string name="nc_important_conversation_desc">\"Nicht stören\"-Benutzerstatus wird für wichtige Unterhaltungen ignoriert</string>
     <string name="nc_invalid_time">Ungültige Zeit</string>
@@ -472,6 +482,10 @@
     <string name="nc_settings_image_compression_summary">Bilder vor dem Upload komprimieren, um die Dateigröße zu reduzieren</string>
     <string name="nc_settings_image_compression_level">Kompressionsstufe</string>
     <string name="nc_settings_image_compression_level_summary">Wählen Sie die Kompressionsstufe für hochgeladene Bilder</string>
+    <string name="nc_settings_video_compression">Videokompression</string>
+    <string name="nc_settings_video_compression_summary">Videos vor dem Upload komprimieren, um die Dateigröße zu reduzieren</string>
+    <string name="nc_settings_video_compression_level">Kompressionsstufe</string>
+    <string name="nc_settings_video_compression_level_summary">Wählen Sie die Kompressionsstufe für hochgeladene Videos</string>
     <string name="nc_settings_incognito_keyboard_desc">Weist die Tastatur an, das personalisierte Lernen zu deaktivieren (ohne Garantien)</string>
     <string name="nc_settings_incognito_keyboard_title">Inkognito-Tastatur</string>
     <string name="nc_settings_no_ringtone">Kein Ton</string>

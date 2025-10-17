@@ -33,6 +33,8 @@ import com.nextcloud.talk.api.NcApi
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.models.ImageCompressionLevel
+import com.nextcloud.talk.models.VideoCompressionLevel
+import com.nextcloud.talk.interfaces.VideoCompressionProgressCallback
 import com.nextcloud.talk.upload.chunked.ChunkedFileUploader
 import com.nextcloud.talk.upload.chunked.OnDataTransferProgressListener
 import com.nextcloud.talk.upload.normal.FileUploader
@@ -47,6 +49,7 @@ import com.nextcloud.talk.utils.database.user.CurrentUserProviderNew
 import com.nextcloud.talk.utils.permissions.PlatformPermissionUtil
 import com.nextcloud.talk.utils.preferences.AppPreferences
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import java.util.UUID
 import okhttp3.OkHttpClient
 import java.io.File
 import javax.inject.Inject
@@ -86,17 +89,27 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     private var isChunkedUploading = false
     private var file: File? = null
     private var chunkedFileUploader: ChunkedFileUploader? = null
+    
+    // Monotonicity guard: ensure progress never goes backwards
+    private var lastReportedProgress = 0
 
     @Suppress("Detekt.TooGenericExceptionCaught")
     override fun doWork(): Result {
+        Log.d(TAG, "🚀 WORKER DOWORK: Starting doWork() method")
         NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
 
         return try {
+            Log.d(TAG, "🚀 WORKER DOWORK: Getting current user...")
             currentUser = currentUserProvider.currentUser.blockingGet()
             val sourceFile = inputData.getString(DEVICE_SOURCE_FILE)
             roomToken = inputData.getString(ROOM_TOKEN)!!
             conversationName = inputData.getString(CONVERSATION_NAME)!!
             val metaData = inputData.getString(META_DATA)
+
+            Log.d(TAG, "📱 WORKER DOWORK: Input data - sourceFile: $sourceFile")
+            Log.d(TAG, "📱 WORKER DOWORK: Input data - roomToken: $roomToken")
+            Log.d(TAG, "📱 WORKER DOWORK: Input data - conversationName: $conversationName")
+            Log.d(TAG, "📱 WORKER DOWORK: Current user: ${currentUser.userId}")
 
             checkNotNull(currentUser)
             checkNotNull(sourceFile)
@@ -104,12 +117,41 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             checkNotNull(roomToken)
 
             val sourceFileUri = sourceFile.toUri()
+            Log.d(TAG, "📁 WORKER DOWORK: Source URI: $sourceFileUri")
+            Log.d(TAG, "📁 WORKER DOWORK: URI scheme: ${sourceFileUri.scheme}")
+
             fileName = FileUtils.getFileName(sourceFileUri, context)
+            Log.d(TAG, "📝 WORKER DOWORK: File name: $fileName")
+
             file = FileUtils.getFileFromUri(context, sourceFileUri)
+            Log.d(TAG, "📂 WORKER DOWORK: File object: $file")
+
+            if (file == null) {
+                Log.e(TAG, "❌ WORKER DOWORK: File is null after getFileFromUri!")
+                showFailedToUploadNotification()
+                return Result.failure()
+            }
+
+            Log.d(TAG, "📊 WORKER DOWORK: File exists: ${file!!.exists()}, size: ${file!!.length()} bytes")
 
             // Apply image compression if enabled and file is an image
+            Log.d(TAG, "🖼️ WORKER DOWORK: Starting image compression check...")
             val originalFile = file
             file = applyImageCompressionIfNeeded(file, sourceFileUri)
+            Log.d(TAG, "🖼️ WORKER DOWORK: Image compression completed")
+
+            // Apply video compression if enabled and file is a video
+            Log.d(TAG, "🎥 WORKER DOWORK: Starting video compression check...")
+            Log.d(
+                TAG,
+                "🎥 WORKER DOWORK: File before video compression: ${file?.absolutePath}, size: ${file?.length()} bytes"
+            )
+            file = applyVideoCompressionIfNeeded(file ?: originalFile, sourceFileUri)
+            Log.d(TAG, "🎥 WORKER DOWORK: Video compression completed")
+            Log.d(
+                TAG,
+                "🎥 WORKER DOWORK: File after video compression: ${file?.absolutePath}, size: ${file?.length()} bytes"
+            )
 
             // If compression was applied, update the URI to point to compressed file
             val finalUri = if (file != originalFile && file != null) {
@@ -124,6 +166,18 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
             initNotificationSetup()
             file?.let { isChunkedUploading = it.length() > CHUNK_UPLOAD_THRESHOLD_SIZE }
+            
+            // Set upload status before starting upload
+            setProgressWithMonotonicityGuard(
+                Data.Builder()
+                    .putString("status", "uploading")
+                    .putString("fileName", fileName)
+                    .putInt("progress", 0)
+                    .putString("phase", "Wird hochgeladen...")
+                    .putLong("currentSizeBytes", file?.length() ?: 0L)
+                    .build()
+            )
+            
             val uploadSuccess: Boolean = uploadFile(finalUri, metaData, remotePath)
 
             if (uploadSuccess) {
@@ -134,11 +188,14 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 return Result.failure()
             }
 
-            Log.e(TAG, "Something went wrong when trying to upload file")
+            Log.e(TAG, "❌ WORKER DOWORK: Something went wrong when trying to upload file")
             showFailedToUploadNotification()
             return Result.failure()
         } catch (e: Exception) {
-            Log.e(TAG, "Something went wrong when trying to upload file", e)
+            Log.e(TAG, "❌ WORKER DOWORK: Exception occurred in doWork()", e)
+            Log.e(TAG, "❌ WORKER DOWORK: Exception type: ${e.javaClass.simpleName}")
+            Log.e(TAG, "❌ WORKER DOWORK: Exception message: ${e.message}")
+            e.printStackTrace()
             showFailedToUploadNotification()
             return Result.failure()
         }
@@ -158,9 +215,42 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         } else {
             Log.d(TAG, "starting normal upload (not chunked) of $fileName")
 
-            FileUploader(okHttpClient, context, currentUser, roomToken, ncApi, file!!)
-                .upload(fileUri, fileName, remotePath, metaData)
+            // Initialize notification for normal upload
+            initNotificationWithPercentage()
+
+            // Use FileUploader with real progress callback
+            val uploadResult = FileUploader(okHttpClient, context, currentUser, roomToken, ncApi, file!!)
+                .upload(fileUri, fileName, remotePath, metaData) { uploadPercentage ->
+                    // Real upload progress callback! 🎉
+                    // Map upload progress to 80-100% range (compression was 0-80%)
+                    val totalProgress = 80 + (uploadPercentage * 20 / 100)
+                    Log.d(TAG, "Normal upload progress: $uploadPercentage% (total: $totalProgress%)")
+                    
+                    // Update notification
+                    mBuilder?.let { builder ->
+                        val notification = builder
+                            .setContentTitle(context.resources.getString(R.string.nc_upload_in_progess))
+                            .setContentText(getNotificationContentText(totalProgress))
+                            .setProgress(100, totalProgress, false)
+                            .setOngoing(true)
+                            .build()
+                        mNotifyManager?.notify(notificationId, notification)
+                    }
+                    
+                    // Update WorkManager progress for UI observation
+                    setProgressWithMonotonicityGuard(
+                        Data.Builder()
+                            .putString("status", "uploading")
+                            .putString("fileName", fileName)
+                            .putInt("progress", totalProgress)
+                            .putString("phase", "Wird hochgeladen...")
+                            .putLong("currentSizeBytes", file!!.length())
+                            .build()
+                    )
+                }
                 .blockingFirst()
+
+            uploadResult
         }
 
     private fun getRemotePath(currentUser: User): String {
@@ -171,12 +261,42 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     }
 
     override fun onTransferProgress(percentage: Int) {
+        // Map chunked upload progress to 80-100% range (compression was 0-80%)
+        val totalProgress = 80 + (percentage * 20 / 100)
+        
         val progressUpdateNotification = mBuilder!!
-            .setProgress(HUNDRED_PERCENT, percentage, false)
-            .setContentText(getNotificationContentText(percentage))
+            .setProgress(HUNDRED_PERCENT, totalProgress, false)
+            .setContentText(getNotificationContentText(totalProgress))
             .build()
 
         mNotifyManager!!.notify(notificationId, progressUpdateNotification)
+        
+        // Also update WorkManager progress for UI observation with monotonicity guard
+        setProgressWithMonotonicityGuard(
+            Data.Builder()
+                .putString("status", "uploading")
+                .putString("fileName", fileName)
+                .putInt("progress", totalProgress)
+                .putString("phase", "Wird hochgeladen...")
+                .putLong("currentSizeBytes", file?.length() ?: 0L)
+                .build()
+        )
+    }
+    
+    /**
+     * Sets progress with monotonicity guard - ensures progress never goes backwards
+     */
+    private fun setProgressWithMonotonicityGuard(data: Data) {
+        val newProgress = data.getInt("progress", 0)
+        
+        // Only update if progress is moving forward or staying the same
+        if (newProgress >= lastReportedProgress) {
+            lastReportedProgress = newProgress
+            setProgressAsync(data)
+            Log.v(TAG, "✅ Progress updated: $newProgress%")
+        } else {
+            Log.w(TAG, "⚠️ Progress going backwards blocked: $newProgress% < $lastReportedProgress%")
+        }
     }
 
     override fun onStopped() {
@@ -387,8 +507,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                     Log.w(TAG, "⚠️ COMPRESSION MINIMAL: Only $compressionRatio% reduction - check settings")
                 }
 
-                // Update the fileName to reflect the compressed file
-                fileName = compressedFile.name
+                // Don't change fileName - keep original name for upload
+                // The compressed file is now used, but uploaded with original name
 
                 compressedFile
             } else {
@@ -397,6 +517,282 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error during image compression, using original file", e)
+            originalFile
+        }
+    }
+
+    /**
+     * Applies video compression if enabled in settings and the file is a video
+     * @param originalFile The original file to potentially compress
+     * @param sourceFileUri The source URI for MIME type checking
+     * @return The compressed file if compression was applied and successful, otherwise the original file
+     */
+    private fun applyVideoCompressionIfNeeded(originalFile: File?, sourceFileUri: Uri): File? {
+        Log.d(TAG, "VIDEO_COMPRESSION: Method entry - originalFile: ${originalFile?.name}")
+        if (originalFile == null) {
+            Log.d(TAG, "VIDEO_COMPRESSION: originalFile is null, returning null")
+            return null
+        }
+
+        Log.d(TAG, "VIDEO_COMPRESSION: Getting compression level from preferences...")
+        // Get the compression level from preferences
+        val compressionLevelKey = appPreferences.videoCompressionLevel
+        Log.d(TAG, "VIDEO_COMPRESSION: Got compression level key: $compressionLevelKey")
+        val compressionLevel = VideoCompressionLevel.fromKey(compressionLevelKey)
+        Log.d(TAG, "VIDEO_COMPRESSION: Parsed compression level: ${compressionLevel.name}")
+
+        if (!compressionLevel.shouldCompress()) {
+            Log.d(TAG, "VIDEO_COMPRESSION: Compression level shouldCompress() returned false")
+            Log.d(TAG, "Video compression is disabled or set to NONE")
+            return originalFile
+        }
+
+        Log.d(TAG, "VIDEO_COMPRESSION: Compression level should compress, checking if file is video...")
+        // Check if the file is a video (using both file and URI checks for reliability)
+        Log.d(TAG, "VIDEO_COMPRESSION: Calling FileUtils.isVideoFile(originalFile)...")
+        val isVideoFromFile = FileUtils.isVideoFile(originalFile)
+        Log.d(TAG, "VIDEO_COMPRESSION: isVideoFromFile result: $isVideoFromFile")
+
+        Log.d(TAG, "VIDEO_COMPRESSION: Calling FileUtils.isVideoFile(context, sourceFileUri)...")
+        val isVideoFromUri = FileUtils.isVideoFile(context, sourceFileUri)
+        Log.d(TAG, "VIDEO_COMPRESSION: isVideoFromUri result: $isVideoFromUri")
+
+        val isVideo = isVideoFromFile || isVideoFromUri
+        Log.d(TAG, "VIDEO_COMPRESSION: Final isVideo result: $isVideo")
+
+        if (!isVideo) {
+            Log.d(TAG, "File is not a video, skipping compression")
+            return originalFile
+        }
+
+        Log.d(
+            TAG,
+            "VIDEO_COMPRESSION: Starting video compression for file: ${originalFile.name} with level: ${compressionLevel.name}"
+        )
+
+        return try {
+            Log.d(TAG, "VIDEO_COMPRESSION: Entering try block for video compression")
+            // Create a compressed file in cache directory
+            val compressedFileName = "compressed_video_${compressionLevel.key}_" +
+                "${System.currentTimeMillis()}_${originalFile.name}"
+            Log.d(TAG, "VIDEO_COMPRESSION: Created compressed file name: $compressedFileName")
+            val compressedFile = File(context.cacheDir, compressedFileName)
+            Log.d(TAG, "VIDEO_COMPRESSION: Created compressed file object: ${compressedFile.absolutePath}")
+
+            // Apply compression using the specified level with progress tracking
+            val startTime = SystemClock.elapsedRealtime()
+            val progressCallback = object : VideoCompressionProgressCallback {
+                override fun onCompressionStarted() {
+                    Log.d(TAG, "Video compression started for ${originalFile.name}")
+
+                    // Update notification to show compression phase
+                    mBuilder?.let { builder ->
+                        val notification = builder
+                            .setContentTitle(
+                                context.resources.getString(R.string.nc_video_compression_notification_title)
+                            )
+                            .setContentText(
+                                context.resources.getString(
+                                    R.string.nc_video_compression_notification_starting,
+                                    originalFile.name
+                                )
+                            )
+                            .setSmallIcon(R.drawable.upload_white)
+                            .setProgress(100, 0, false)
+                            .setOngoing(true)
+                            .build()
+
+                        mNotifyManager?.notify(notificationId, notification)
+                    }
+
+                    // Update WorkManager progress
+                    setProgressWithMonotonicityGuard(
+                        Data.Builder()
+                            .putString("status", "compressing")
+                            .putString("fileName", originalFile.name)
+                            .putInt("progress", 0)
+                            .putString("phase", "Starte Video-Komprimierung...")
+                            .build()
+                    )
+                }
+
+                override fun onProgressUpdate(
+                    progress: Int,
+                    currentFrame: Int,
+                    totalFrames: Int,
+                    originalSizeBytes: Long,
+                    currentSizeBytes: Long
+                ) {
+                    Log.v(
+                        TAG,
+                        "Video compression progress: $progress% ($currentFrame/$totalFrames frames)"
+                    )
+
+                    // Update notification with compression progress
+                    mBuilder?.let { builder ->
+                        val notification = builder
+                            .setContentTitle(
+                                context.resources.getString(R.string.nc_video_compression_notification_title)
+                            )
+                            .setContentText(
+                                context.resources.getString(
+                                    R.string.nc_video_compression_notification_progress,
+                                    originalFile.name,
+                                    progress
+                                )
+                            )
+                            .setProgress(100, progress, false)
+                            .setOngoing(true)
+                            .build()
+
+                        mNotifyManager?.notify(notificationId, notification)
+                    }
+
+                    // Update WorkManager progress with detailed information
+                    val estimatedTimeLeft = if (progress > 0) {
+                        val timePerPercent = (SystemClock.elapsedRealtime() - startTime) / progress
+                        val remainingPercent = 100 - progress
+                        (timePerPercent * remainingPercent) / 1000 // in seconds
+                    } else {
+                        0L
+                    }
+
+                    setProgressWithMonotonicityGuard(
+                        Data.Builder()
+                            .putString("status", "compressing")
+                            .putString("fileName", originalFile.name)
+                            .putInt("progress", progress)
+                            .putString("phase", "Komprimiere Video: Frame $currentFrame von $totalFrames")
+                            .putInt("processedFrames", currentFrame)
+                            .putInt("estimatedTotalFrames", totalFrames)
+                            .putLong("currentSizeBytes", currentSizeBytes)
+                            .putLong("originalSizeBytes", originalSizeBytes)
+                            .putLong("estimatedTimeLeftSeconds", estimatedTimeLeft)
+                            .build()
+                    )
+                }
+
+                override fun onCompressionCompleted(
+                    originalSizeBytes: Long,
+                    compressedSizeBytes: Long,
+                    compressionRatio: Int
+                ) {
+                    Log.d(TAG, "Video compression completed: $compressionRatio% size reduction")
+
+                    // Update notification to show compression completion
+                    mBuilder?.let { builder ->
+                        val sizeMB = compressedSizeBytes / (1024f * 1024f)
+                        val reductionPercent = compressionRatio
+
+                        val notification = builder
+                            .setContentTitle(
+                                context.resources.getString(R.string.nc_video_compression_notification_completed)
+                            )
+                            .setContentText(
+                                context.resources.getString(
+                                    R.string.nc_video_compression_notification_completed_text,
+                                    originalFile.name,
+                                    String.format("%.1f MB", sizeMB),
+                                    reductionPercent
+                                )
+                            )
+                            .setProgress(0, 0, false) // Remove progress bar
+                            .setOngoing(false)
+                            .build()
+
+                        mNotifyManager?.notify(notificationId, notification)
+                    }
+
+                    setProgressWithMonotonicityGuard(
+                        Data.Builder()
+                            .putString("status", "compression_completed")
+                            .putString("fileName", originalFile.name)
+                            .putInt("progress", 80)  // Compression is 0-80%, upload will be 80-100%
+                            .putString("phase", "Video-Komprimierung abgeschlossen")
+                            .putLong("originalSizeBytes", originalSizeBytes)
+                            .putLong("compressedSizeBytes", compressedSizeBytes)
+                            .putFloat("compressionRatio", compressionRatio.toFloat())
+                            .build()
+                    )
+                }
+
+                override fun onCompressionFailed(error: String, exception: Throwable?) {
+                    Log.e(TAG, "Video compression failed: $error", exception)
+
+                    // Update notification to show compression failure
+                    mBuilder?.let { builder ->
+                        val notification = builder
+                            .setContentTitle(
+                                context.resources.getString(R.string.nc_video_compression_notification_failed)
+                            )
+                            .setContentText(
+                                context.resources.getString(
+                                    R.string.nc_video_compression_notification_failed_text,
+                                    originalFile.name
+                                )
+                            )
+                            .setProgress(0, 0, false) // Remove progress bar
+                            .setOngoing(false)
+                            .build()
+
+                        mNotifyManager?.notify(notificationId, notification)
+                    }
+
+                    setProgressWithMonotonicityGuard(
+                        Data.Builder()
+                            .putString("status", "compression_failed")
+                            .putString("fileName", originalFile.name)
+                            .putString("error", error)
+                            .putString("phase", "Video-Komprimierung fehlgeschlagen")
+                            .build()
+                    )
+                }
+            }
+
+            Log.d(TAG, "VIDEO_COMPRESSION: About to call FileUtils.compressVideoFile()")
+            Log.d(TAG, "VIDEO_COMPRESSION: Input file: ${originalFile.absolutePath}, size: ${originalFile.length()}")
+            Log.d(TAG, "VIDEO_COMPRESSION: Output file: ${compressedFile.absolutePath}")
+            Log.d(TAG, "VIDEO_COMPRESSION: Compression level: ${compressionLevel.name}")
+
+            val compressionSuccess = FileUtils.compressVideoFile(
+                inputFile = originalFile,
+                outputFile = compressedFile,
+                compressionLevel = compressionLevel,
+                progressCallback = progressCallback
+            )
+
+            Log.d(TAG, "VIDEO_COMPRESSION: FileUtils.compressVideoFile() returned: $compressionSuccess")
+
+            if (compressionSuccess && compressedFile.exists() && compressedFile.length() > 0) {
+                val originalSize = originalFile.length()
+                val compressedSize = compressedFile.length()
+                val compressionRatio = if (originalSize > 0) {
+                    ((originalSize - compressedSize) * 100 / originalSize).toInt()
+                } else {
+                    0
+                }
+
+                Log.d(
+                    TAG,
+                    "Video compression completed with ${compressionLevel.name}. " +
+                        "Original: ${originalSize / 1024}KB, " +
+                        "Result: ${compressedSize / 1024}KB, " +
+                        "Change: $compressionRatio%"
+                )
+
+                // Note: For now, compression just copies the file (MediaCodec implementation pending)
+                Log.i(TAG, "📹 VIDEO PROCESSING: Using ${compressionLevel.getDescription()}")
+
+                // Don't change fileName - keep original name for upload
+                // The compressed file is now used, but uploaded with original name
+
+                compressedFile
+            } else {
+                Log.w(TAG, "Video compression failed or resulted in empty file, using original")
+                originalFile
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during video compression, using original file", e)
             originalFile
         }
     }
@@ -449,6 +845,12 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         }
 
         fun upload(fileUri: String, roomToken: String, conversationName: String, metaData: String?) {
+            Log.d(TAG, "🚀 WORKER SETUP: Starting upload with WorkManager")
+            Log.d(TAG, "🚀 WORKER SETUP: fileUri: $fileUri")
+            Log.d(TAG, "🚀 WORKER SETUP: roomToken: $roomToken")
+            Log.d(TAG, "🚀 WORKER SETUP: conversationName: $conversationName")
+            Log.d(TAG, "🚀 WORKER SETUP: metaData: $metaData")
+
             val data: Data = Data.Builder()
                 .putString(DEVICE_SOURCE_FILE, fileUri)
                 .putString(ROOM_TOKEN, roomToken)
@@ -458,7 +860,100 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             val uploadWorker: OneTimeWorkRequest = OneTimeWorkRequest.Builder(UploadAndShareFilesWorker::class.java)
                 .setInputData(data)
                 .build()
+
+            Log.d(TAG, "🚀 WORKER SETUP: Enqueueing work with ID: ${uploadWorker.id}")
+            try {
+                WorkManager.getInstance().enqueueUniqueWork(fileUri, ExistingWorkPolicy.KEEP, uploadWorker)
+                Log.d(TAG, "🚀 WORKER SETUP: Work enqueued successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ WORKER SETUP: Failed to enqueue work", e)
+                throw e
+            }
+        }
+
+        fun upload(context: Context, fileUri: String, roomToken: String, conversationName: String, metaData: String?) {
+            Log.d(TAG, "🚀 WORKER SETUP: Starting upload with WorkManager (with Context)")
+            Log.d(TAG, "🚀 WORKER SETUP: fileUri: $fileUri")
+            Log.d(TAG, "🚀 WORKER SETUP: roomToken: $roomToken")
+            Log.d(TAG, "🚀 WORKER SETUP: conversationName: $conversationName")
+            Log.d(TAG, "🚀 WORKER SETUP: metaData: $metaData")
+
+            val data: Data = Data.Builder()
+                .putString(DEVICE_SOURCE_FILE, fileUri)
+                .putString(ROOM_TOKEN, roomToken)
+                .putString(CONVERSATION_NAME, conversationName)
+                .putString(META_DATA, metaData)
+                .build()
+            val uploadWorker: OneTimeWorkRequest = OneTimeWorkRequest.Builder(UploadAndShareFilesWorker::class.java)
+                .setInputData(data)
+                .addTag("upload_file") // Add tag for WorkManager observation
+                .addTag("upload_$fileUri") // Add unique tag for this specific upload
+                .build()
+
+            Log.d(TAG, "🚀 WORKER SETUP: Enqueueing work with ID: ${uploadWorker.id}")
+            try {
+                WorkManager.getInstance(context).enqueueUniqueWork(fileUri, ExistingWorkPolicy.KEEP, uploadWorker)
+                Log.d(TAG, "🚀 WORKER SETUP: Work enqueued successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ WORKER SETUP: Failed to enqueue work", e)
+                throw e
+            }
+        }
+
+        /**
+         * Upload files with progress tracking for video compression
+         * @param fileUri The URI of the file to upload
+         * @param roomToken The room token where the file should be shared
+         * @param conversationName The name of the conversation
+         * @param metaData Optional metadata
+         * @param context Context for showing progress dialog (optional)
+         * @param fileName File name for progress display (optional)
+         * @return WorkRequest ID for progress tracking
+         */
+        fun uploadWithProgress(
+            fileUri: String,
+            roomToken: String,
+            conversationName: String,
+            metaData: String?,
+            context: Context? = null,
+            fileName: String? = null
+        ): UUID {
+            val data: Data = Data.Builder()
+                .putString(DEVICE_SOURCE_FILE, fileUri)
+                .putString(ROOM_TOKEN, roomToken)
+                .putString(CONVERSATION_NAME, conversationName)
+                .putString(META_DATA, metaData)
+                .build()
+            val uploadWorker: OneTimeWorkRequest = OneTimeWorkRequest.Builder(UploadAndShareFilesWorker::class.java)
+                .setInputData(data)
+                .build()
+
             WorkManager.getInstance().enqueueUniqueWork(fileUri, ExistingWorkPolicy.KEEP, uploadWorker)
+
+            // Show progress dialog for video files if context and fileName are provided
+            if (context != null &&
+                fileName != null &&
+                (
+                    fileName.lowercase().endsWith(".mp4") ||
+                        fileName.lowercase().endsWith(".mov") ||
+                        fileName.lowercase().endsWith(".avi") ||
+                        fileName.lowercase().endsWith(".mkv")
+                    )
+            ) {
+                // Show progress dialog for video compression
+                try {
+                    val activity = context as? androidx.fragment.app.FragmentActivity
+                    activity?.let {
+                        val progressDialog = com.nextcloud.talk.ui.dialog.VideoCompressionProgressDialog
+                            .newInstance(fileName, uploadWorker.id)
+                        progressDialog.show(it.supportFragmentManager, "video_compression_progress")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not show progress dialog", e)
+                }
+            }
+
+            return uploadWorker.id
         }
     }
 }
