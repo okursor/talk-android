@@ -189,6 +189,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.max
+import android.util.TypedValue
 
 @AutoInjector(NextcloudTalkApplication::class)
 @Suppress("TooManyFunctions", "ReturnCount", "LargeClass")
@@ -315,6 +317,7 @@ class CallActivity : CallBaseActivity() {
     private var audioOutputDialog: AudioOutputDialog? = null
     private var moreCallActionsDialog: MoreCallActionsDialog? = null
     private var elapsedSeconds: Long = 0
+    private var lastAppliedFontScale = 0f
 
     private var requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -358,6 +361,111 @@ class CallActivity : CallBaseActivity() {
             prepareCall()
         }
     }
+
+    // --- Font-scale aware sizing helpers ---
+    private fun dpToPx(dp: Float): Int {
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            dp,
+            resources.displayMetrics
+        ).roundToInt()
+    }
+
+    private fun applyCallButtonScaling(fontScale: Float) {
+        try {
+            // Base sizes used in layouts
+            val baseFabDp = 40f
+            val baseIncomingDp = 60f
+
+            val targetFabDp = max(48f, baseFabDp * fontScale)
+            val fabPx = dpToPx(targetFabDp)
+
+            val fabViews = listOf(
+                binding!!.pictureInPictureButton,
+                binding!!.audioOutputButton,
+                binding!!.cameraButton,
+                binding!!.microphoneButton,
+                binding!!.moreCallActions,
+                binding!!.hangupButton,
+                binding!!.lowerHandButton
+            )
+
+            for (fab in fabViews) {
+                fab?.let {
+                    val lp = it.layoutParams
+                    lp.width = fabPx
+                    lp.height = fabPx
+                    it.layoutParams = lp
+
+                    try {
+                        // Compute target icon size: base 24dp scaled by fontScale but never larger than
+                        // available space minus minimal padding
+                        val baseIconDp = 24f
+                        val maxIconDp = targetFabDp - 8f
+                        val desiredIconDp = Math.max(16f, Math.min(baseIconDp * fontScale, maxIconDp))
+                        val iconPx = dpToPx(desiredIconDp)
+
+                        // Rasterize and set the drawable scaled to iconPx x iconPx (if drawable present)
+                        val drawable = it.drawable
+                        if (drawable != null) {
+                            val bd = com.nextcloud.talk.utils.IconScaler.getScaledDrawable(this, drawable, iconPx, iconPx)
+                            it.setImageDrawable(bd)
+                        }
+
+                        // Use CENTER_INSIDE so the icon is centered. Remove manual padding so centering works reliably.
+                        try {
+                            if (it is android.widget.ImageView) {
+                                it.scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                            }
+                        } catch (_: Throwable) {
+                        }
+
+                        it.setPadding(0, 0, 0, 0)
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+
+            // Incoming-call ImageButtons in call notification layout (if present)
+            val incomingDp = max(48f, baseIncomingDp * fontScale)
+            val incomingPx = dpToPx(incomingDp)
+            val incomingButtons = listOfNotNull(
+                try { findViewById<View>(R.id.callAnswerVoiceOnlyView) } catch (_: Throwable) { null },
+                try { findViewById<View>(R.id.hangupButton) } catch (_: Throwable) { null },
+                try { findViewById<View>(R.id.callAnswerCameraView) } catch (_: Throwable) { null }
+            )
+            for (btn in incomingButtons) {
+                val lp = btn.layoutParams
+                lp.width = incomingPx
+                lp.height = incomingPx
+                btn.layoutParams = lp
+
+                try {
+                    if (btn is android.widget.ImageView) {
+                        val baseIconDp = 24f
+                        val maxIconDp = baseIncomingDp - 8f
+                        val desiredIconDp = Math.max(16f, Math.min(baseIconDp * fontScale, maxIconDp))
+                        val iconPx = dpToPx(desiredIconDp)
+                        val drawable = btn.drawable
+                        if (drawable != null) {
+                            val bd = com.nextcloud.talk.utils.IconScaler.getScaledDrawable(this, drawable, iconPx, iconPx)
+                            btn.setImageDrawable(bd)
+                        }
+                        try {
+                            btn.scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                        } catch (_: Throwable) {
+                        }
+                        btn.setPadding(0, 0, 0, 0)
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+        } catch (t: Throwable) {
+            Log.d(TAG, "applyCallButtonScaling failed: ${t.message}")
+        }
+    }
+
+    // icon rasterization now handled by IconScaler utility
     private var canPublishAudioStream = false
     private var canPublishVideoStream = false
     private var isModerator = false
@@ -413,6 +521,33 @@ class CallActivity : CallBaseActivity() {
         reactionAnimator = ReactionAnimator(context, binding!!.reactionAnimationWrapper, viewThemeUtils)
 
         checkInitialDevicePermissions()
+        // Apply call button scaling based on user font scale preference
+        // Only if smartwatch mode is enabled
+        try {
+            val smartwatchMode = try {
+                appPreferences.getSmartwatchModeEnabled()
+            } catch (_: Exception) {
+                try {
+                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getSmartwatchModeEnabled()
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (smartwatchMode) {
+                val scale = try {
+                    appPreferences.getFontScale()
+                } catch (_: Exception) {
+                    try {
+                        com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+                    } catch (_: Exception) {
+                        1.0f
+                    }
+                }
+                applyCallButtonScaling(scale)
+                lastAppliedFontScale = scale
+            }
+        } catch (_: Throwable) {
+        }
     }
 
     private fun initCallRecordingViewModel(recordingState: Int) {
@@ -630,6 +765,35 @@ class CallActivity : CallBaseActivity() {
         } catch (e: IOException) {
             Log.e(TAG, "Failed to evict cache")
         }
+        // Re-apply scaling if font scale changed while activity was paused
+        // Only if smartwatch mode is enabled
+        try {
+            val smartwatchMode = try {
+                appPreferences.getSmartwatchModeEnabled()
+            } catch (_: Exception) {
+                try {
+                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getSmartwatchModeEnabled()
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (smartwatchMode) {
+                val currentScale = try {
+                    appPreferences.getFontScale()
+                } catch (_: Exception) {
+                    try {
+                        com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getFontScale()
+                    } catch (_: Exception) {
+                        1.0f
+                    }
+                }
+                if (abs(currentScale - lastAppliedFontScale) > 0.01f) {
+                    applyCallButtonScaling(currentScale)
+                    lastAppliedFontScale = currentScale
+                }
+            }
+        } catch (_: Throwable) {
+        }
     }
 
     override fun onStop() {
@@ -830,10 +994,31 @@ class CallActivity : CallBaseActivity() {
                 availableDevices
             )
         }
-        if (isVoiceOnlyCall) {
-            setDefaultAudioOutputChannel(AudioDevice.EARPIECE)
-        } else {
-            setDefaultAudioOutputChannel(AudioDevice.SPEAKER_PHONE)
+        try {
+            // Use injected appPreferences from BaseActivity (inherited) instead of creating new instance
+            val smartwatchMode = appPreferences.getSmartwatchModeEnabled()
+            if (smartwatchMode) {
+                val preferred = appPreferences.getPreferredAudioDevice()
+                val device = when (preferred) {
+                    "EARPIECE" -> AudioDevice.EARPIECE
+                    else -> AudioDevice.SPEAKER_PHONE
+                }
+                setDefaultAudioOutputChannel(device)
+            } else {
+                if (isVoiceOnlyCall) {
+                    setDefaultAudioOutputChannel(AudioDevice.EARPIECE)
+                } else {
+                    setDefaultAudioOutputChannel(AudioDevice.SPEAKER_PHONE)
+                }
+            }
+        } catch (e: Exception) {
+            // Fallback to default behavior if preferences can't be read
+            Log.e(TAG, "Failed to read smartwatch audio preferences", e)
+            if (isVoiceOnlyCall) {
+                setDefaultAudioOutputChannel(AudioDevice.EARPIECE)
+            } else {
+                setDefaultAudioOutputChannel(AudioDevice.SPEAKER_PHONE)
+            }
         }
         iceServers = ArrayList()
 
@@ -3242,7 +3427,11 @@ class CallActivity : CallBaseActivity() {
             )
             actions.add(RemoteAction(icon, title!!, title, intent))
             mPictureInPictureParamsBuilder.setActions(actions)
-            setPictureInPictureParams(mPictureInPictureParamsBuilder.build())
+            try {
+                setPictureInPictureParams(mPictureInPictureParamsBuilder.build())
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "Failed to set PiP params, device may not support PiP", e)
+            }
         }
     }
 

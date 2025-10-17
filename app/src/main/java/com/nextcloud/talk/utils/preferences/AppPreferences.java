@@ -141,6 +141,28 @@ public interface AppPreferences {
 
     void removeTheme();
 
+    boolean getSmartwatchModeEnabled();
+
+    void setSmartwatchModeEnabled(boolean enabled);
+
+    void removeSmartwatchModeEnabled();
+
+    /**
+     * Preferred audio device to use when Smartwatch mode is enabled.
+     * Expected values: "SPEAKER_PHONE" or "EARPIECE" (string constants used by WebRtcAudioManager mapping).
+     */
+    String getPreferredAudioDevice();
+
+    void setPreferredAudioDevice(String deviceName);
+
+    void removePreferredAudioDevice();
+
+    float getFontScale();
+
+    void setFontScale(float value);
+
+    void removeFontScale();
+
     boolean isDbCypherToUpgrade();
 
     void setDbCypherToUpgrade(boolean value);

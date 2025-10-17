@@ -44,6 +44,7 @@ import com.nextcloud.talk.utils.adjustUIForAPILevel35
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.database.user.CurrentUserProviderNew
 import com.nextcloud.talk.utils.preferences.AppPreferences
+import com.nextcloud.talk.utils.preferences.AppPreferencesImpl
 import com.nextcloud.talk.utils.ssl.TrustManager
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
@@ -52,9 +53,51 @@ import java.security.cert.CertificateParsingException
 import java.security.cert.X509Certificate
 import java.text.DateFormat
 import javax.inject.Inject
+import kotlin.math.abs
 
 @AutoInjector(NextcloudTalkApplication::class)
 open class BaseActivity : AppCompatActivity() {
+
+    // remember last seen font scale so we can detect changes made while the
+    // activity was stopped (for example when user changed it in Settings)
+    private var lastSeenFontScale: Float = 1.0f
+
+    override fun attachBaseContext(newBase: Context) {
+        // Try to read fontScale from preferences and apply before attaching context.
+        // Injection hasn't run yet here, so fall back to a direct DataStore-backed
+        // implementation if the injected AppPreferences is not available.
+        var scale = 1.0f
+        var smartwatchMode = false
+        try {
+            if (this::appPreferences.isInitialized) {
+                smartwatchMode = appPreferences.getSmartwatchModeEnabled()
+                scale = appPreferences.getFontScale()
+            } else {
+                try {
+                    // Directly instantiate the DataStore-backed implementation to
+                    // synchronously retrieve the stored font scale prior to injection.
+                    val prefs = AppPreferencesImpl(newBase)
+                    smartwatchMode = prefs.getSmartwatchModeEnabled()
+                    scale = prefs.getFontScale()
+                } catch (e: Exception) {
+                    // If anything goes wrong reading preferences here, keep default
+                    smartwatchMode = false
+                    scale = 1.0f
+                }
+            }
+        } catch (e: Exception) {
+            // ignore and use default
+        }
+
+        val config = newBase.resources.configuration
+        val newConfig = android.content.res.Configuration(config)
+        // Only apply font scale if smartwatch mode is enabled
+        if (smartwatchMode) {
+            newConfig.fontScale = scale
+        }
+        val ctx = newBase.createConfigurationContext(newConfig)
+        super.attachBaseContext(ctx)
+    }
 
     enum class AppBarLayoutType {
         TOOLBAR,
@@ -88,12 +131,40 @@ open class BaseActivity : AppCompatActivity() {
         adjustUIForAPILevel35()
         super.onCreate(savedInstanceState)
 
+        // capture current font scale after injection so we can detect changes
+        try {
+            lastSeenFontScale = try { appPreferences.getFontScale() } catch (_: Throwable) { 1.0f }
+        } catch (_: Exception) {
+            lastSeenFontScale = 1.0f
+        }
+
         cleanTempCertPreference()
     }
 
     public override fun onStart() {
         super.onStart()
         eventBus.register(this)
+        // Detect font-scale changes that may have happened while the activity
+        // was stopped (e.g. user changed the value in SettingsActivity). If a
+        // change is detected, recreate the activity so attachBaseContext will
+        // apply the new configuration. Skip recreating the SettingsActivity
+        // itself to avoid interfering with the settings UI.
+        try {
+            if (this !is com.nextcloud.talk.settings.SettingsActivity) {
+                val smartwatchMode = try { appPreferences.getSmartwatchModeEnabled() } catch (_: Throwable) { false }
+                if (smartwatchMode) {
+                    val current = try { appPreferences.getFontScale() } catch (_: Throwable) { 1.0f }
+                    if (abs(current - lastSeenFontScale) > 0.01f) {
+                        Log.d(TAG, "Font scale changed from $lastSeenFontScale to $current — recreating activity")
+                        lastSeenFontScale = current
+                        recreate()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // best-effort only — don't crash the app on preference read errors
+            Log.w(TAG, "Failed to check font scale change", e)
+        }
     }
 
     public override fun onResume() {

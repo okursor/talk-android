@@ -171,6 +171,15 @@ How to translate with transifex:
     <string name="nc_settings_contact_admin_of">Please contact the administrator of</string>
 
     <string name="nc_settings_appearance">Appearance</string>
+    <string name="nc_settings_smartwatch_mode_title">Smartwatch mode</string>
+    <string name="nc_settings_smartwatch_mode_desc">Enable font scaling for better readability on small screens</string>
+    <string name="nc_settings_smartwatch_audio_output_title">Smartwatch audio output</string>
+    <string name="nc_settings_smartwatch_audio_output_speaker">Speaker</string>
+    <string name="nc_settings_smartwatch_audio_output_earpiece">Earpiece</string>
+    <string name="nc_settings_font_scale_title">Font size</string>
+    <string name="nc_settings_font_scale_normal">Normal</string>
+    <string name="nc_settings_font_scale_large">Large</string>
+    <string name="nc_settings_font_scale_very_large">Very large</string>
     <string name="nc_settings_theme_title">Theme</string>
     <string name="nc_settings_theme_key">theme</string>
     <string name="nc_settings_theme_battery_saver_key" translatable="false">battery_saver</string>

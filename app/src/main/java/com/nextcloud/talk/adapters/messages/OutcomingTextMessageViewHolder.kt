@@ -47,6 +47,7 @@ import com.nextcloud.talk.utils.message.MessageCheckboxUtils.addPlainTextLine
 import com.nextcloud.talk.utils.message.MessageCheckboxUtils.matchCheckbox
 import com.nextcloud.talk.utils.message.MessageCheckboxUtils.updateMessageWithCheckboxStates
 import com.nextcloud.talk.utils.message.MessageUtils
+import com.nextcloud.talk.utils.preferences.AppPreferences
 import com.stfalcon.chatkit.messages.MessageHolders.OutcomingTextMessageViewHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +74,9 @@ class OutcomingTextMessageViewHolder(itemView: View) :
 
     @Inject
     lateinit var messageUtils: MessageUtils
+
+    @Inject
+    lateinit var appPreferences: AppPreferences
 
     @Inject
     lateinit var dateUtils: DateUtils
@@ -106,7 +110,25 @@ class OutcomingTextMessageViewHolder(itemView: View) :
     private fun processMessage(message: ChatMessage, hasCheckboxes: Boolean) {
         var isBubbled = true
         val layoutParams = binding.messageTime.layoutParams as FlexboxLayout.LayoutParams
-        var textSize = context.resources.getDimension(R.dimen.chat_text_size)
+        // base text size in pixels from resources (dimens defined in sp)
+        val baseTextPx = context.resources.getDimension(R.dimen.chat_text_size)
+        // apply app fontScale if available, fallback to system font scale
+        // Only if smartwatch mode is enabled
+        val smartwatchMode = try {
+            appPreferences.getSmartwatchModeEnabled()
+        } catch (_: Throwable) {
+            false
+        }
+        val fontScale = if (smartwatchMode) {
+            try {
+                appPreferences.getFontScale()
+            } catch (_: Throwable) {
+                context.resources.configuration.fontScale
+            }
+        } else {
+            1.0f // master behavior - no scaling
+        }
+        var textSize = baseTextPx * fontScale
         if (!hasCheckboxes) {
             realView.isSelected = false
             layoutParams.isWrapBefore = false

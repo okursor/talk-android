@@ -100,7 +100,25 @@ class IncomingTextMessageViewHolder(itemView: View, payload: Any) :
 
     @Suppress("LongMethod")
     private fun processMessage(message: ChatMessage, hasCheckboxes: Boolean) {
-        var textSize = context.resources!!.getDimension(R.dimen.chat_text_size)
+        // base text size in pixels from resources (dimens defined in sp)
+        var baseTextPx = context.resources!!.getDimension(R.dimen.chat_text_size)
+        // apply app fontScale if available, fallback to system font scale
+        // Only if smartwatch mode is enabled
+        val smartwatchMode = try {
+            appPreferences.getSmartwatchModeEnabled()
+        } catch (_: Throwable) {
+            false
+        }
+        val fontScale = if (smartwatchMode) {
+            try {
+                appPreferences.getFontScale()
+            } catch (_: Throwable) {
+                context.resources.configuration.fontScale
+            }
+        } else {
+            1.0f // master behavior - no scaling
+        }
+        var textSize = baseTextPx * fontScale
         if (!hasCheckboxes) {
             binding.messageText.visibility = View.VISIBLE
             binding.checkboxContainer.visibility = View.GONE

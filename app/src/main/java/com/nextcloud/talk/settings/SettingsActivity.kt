@@ -31,6 +31,9 @@ import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
+import android.widget.Spinner
+
+import android.widget.AdapterView
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
@@ -106,6 +109,7 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.util.Locale
 import javax.inject.Inject
+import android.widget.ArrayAdapter
 
 @Suppress("LargeClass", "TooManyFunctions")
 @AutoInjector(NextcloudTalkApplication::class)
@@ -561,6 +565,7 @@ class SettingsActivity :
         var port = -1
         val uri: URI
         try {
+            Log.d(TAG, "Font scale init: enter block")
             uri = URI(currentUser!!.baseUrl!!)
             host = uri.host
             port = uri.port
@@ -601,7 +606,8 @@ class SettingsActivity :
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun registerChangeListeners() {
-        val appPreferences = AppPreferencesImpl(context)
+        // Use the Activity instance as context to avoid relying on field injection timing
+        val appPreferences = AppPreferencesImpl(this)
         proxyTypeFlow = appPreferences.readString(AppPreferencesImpl.PROXY_TYPE)
         proxyCredentialFlow = appPreferences.readBoolean(AppPreferencesImpl.PROXY_CRED)
         screenSecurityFlow = appPreferences.readBoolean(AppPreferencesImpl.SCREEN_SECURITY)
@@ -617,12 +623,13 @@ class SettingsActivity :
         typingStatusFlow = appPreferences.readBoolean(AppPreferencesImpl.TYPING_STATUS)
         phoneBookIntegrationFlow = appPreferences.readBoolean(AppPreferencesImpl.PHONE_BOOK_INTEGRATION)
 
-        var pos = resources.getStringArray(R.array.screen_lock_timeout_entry_values).indexOf(
-            appPreferences.screenLockTimeout
-        )
-        binding.settingsScreenLockTimeoutLayoutDropdown.setText(
-            resources.getStringArray(R.array.screen_lock_timeout_descriptions)[pos]
-        )
+        // Defensive lookup: if stored value isn't found in the array, fall back to index 0
+        val timeoutValues = resources.getStringArray(R.array.screen_lock_timeout_entry_values)
+        var pos = timeoutValues.indexOf(appPreferences.screenLockTimeout)
+        if (pos < 0) pos = 0
+        val timeoutDescriptions = resources.getStringArray(R.array.screen_lock_timeout_descriptions)
+        if (pos >= timeoutDescriptions.size) pos = 0
+        binding.settingsScreenLockTimeoutLayoutDropdown.setText(timeoutDescriptions[pos])
 
         binding.settingsScreenLockTimeoutLayoutDropdown.setSimpleItems(R.array.screen_lock_timeout_descriptions)
         binding.settingsScreenLockTimeoutLayoutDropdown.setOnItemClickListener { _, _, position, _ ->
@@ -630,13 +637,363 @@ class SettingsActivity :
             appPreferences.screenLockTimeout = entryVal
             SecurityUtils.createKey(entryVal)
         }
-        pos = resources.getStringArray(R.array.theme_entry_values).indexOf(appPreferences.theme)
-        binding.settingsTheme.setText(resources.getStringArray(R.array.theme_descriptions)[pos])
+    val themeValues = resources.getStringArray(R.array.theme_entry_values)
+    pos = themeValues.indexOf(appPreferences.theme)
+    if (pos < 0) pos = 0
+    val themeDescriptions = resources.getStringArray(R.array.theme_descriptions)
+    if (pos >= themeDescriptions.size) pos = 0
+    binding.settingsTheme.setText(themeDescriptions[pos])
 
         binding.settingsTheme.setSimpleItems(R.array.theme_descriptions)
         binding.settingsTheme.setOnItemClickListener { _, _, position, _ ->
             val entryVal: String = resources.getStringArray(R.array.theme_entry_values)[position]
             appPreferences.theme = entryVal
+        }
+
+        // Smartwatch Mode Toggle - enables/disables font scaling feature
+        binding.settingsSmartwatchModeSwitch.isChecked = appPreferences.getSmartwatchModeEnabled()
+        binding.settingsSmartwatchMode.setOnClickListener {
+            val isChecked = binding.settingsSmartwatchModeSwitch.isChecked
+            binding.settingsSmartwatchModeSwitch.isChecked = !isChecked
+            appPreferences.setSmartwatchModeEnabled(!isChecked)
+
+            // Enable/disable font scale setting based on smartwatch mode
+            updateFontScaleEnabled()
+            // Enable/disable preferred audio output spinner
+            updateSmartwatchAudioOutputEnabled()
+        }
+
+        // Initially enable/disable font scale based on current smartwatch mode state
+        updateFontScaleEnabled()
+        updateSmartwatchAudioOutputEnabled()
+
+        // Initialize Smartwatch audio output spinner (only two options: Speaker, Earpiece)
+        try {
+            val audioOptions = listOf(
+                resources.getString(R.string.nc_settings_smartwatch_audio_output_speaker),
+                resources.getString(R.string.nc_settings_smartwatch_audio_output_earpiece)
+            )
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, audioOptions)
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            binding.settingsSmartwatchAudioOutput.setAdapter(adapter)
+
+            // Read saved preference
+            val prefDevice = try {
+                appPreferences.getPreferredAudioDevice()
+            } catch (e: Exception) {
+                "SPEAKER_PHONE"
+            }
+            val selectedIndex = if (prefDevice == "EARPIECE") 1 else 0
+            binding.settingsSmartwatchAudioOutput.setText(audioOptions[selectedIndex], false)
+
+            binding.settingsSmartwatchAudioOutput.setOnItemClickListener { parent, _, position, _ ->
+                val selected = parent.getItemAtPosition(position) as String
+                val deviceName = if (selected == resources.getString(R.string.nc_settings_smartwatch_audio_output_earpiece)) {
+                    "EARPIECE"
+                } else {
+                    "SPEAKER_PHONE"
+                }
+                appPreferences.setPreferredAudioDevice(deviceName)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to init smartwatch audio output spinner", e)
+        }
+
+    }
+
+    private fun updateSmartwatchAudioOutputEnabled() {
+        try {
+            val enabled = appPreferences.getSmartwatchModeEnabled()
+            binding.settingsSmartwatchAudioOutput.isEnabled = enabled
+            binding.settingsSmartwatchAudioOutput.alpha = if (enabled) ENABLED_ALPHA else DISABLED_ALPHA
+        } catch (e: Exception) {
+            // ignore
+        }
+
+        // Font scale setting (Normal, Groß, Sehr groß)
+        // Guard the whole block: any unexpected exception here should not crash the SettingsActivity
+        try {
+            // Font scale setting: use visible Spinner as primary control (Material exposed dropdown was unreliable)
+            // prepare descriptions/values and compute current selection index so we can always initialize the
+            // spinner fallback even if the exposed dropdown setup fails at runtime
+            // Insert diagnostic checks near the font-scale initialization in registerChangeListeners()
+            try {
+                // Diagnostic: print the runtime view class and adapter counts for troubleshooting
+                try {
+                    Log.i(TAG, "diagnostic: settingsFontScale view = ${binding.settingsFontScale::class.java.name}")
+                    val acView = binding.settingsFontScale
+                    if (acView is android.widget.AutoCompleteTextView) {
+                        val a = acView.adapter
+                        Log.i(TAG, "diagnostic: dropdown adapter count=${a?.count ?: "null"}")
+                    } else {
+                        Log.i(TAG, "diagnostic: settingsFontScale is not AutoCompleteTextView: ${acView?.javaClass?.name}")
+                    }
+                    val spinnerAdapter = binding.settingsFontScaleSpinner?.adapter
+                    Log.i(TAG, "diagnostic: spinner adapter count=${spinnerAdapter?.count ?: "null"}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "diagnostic: checking view class failed", e)
+                }
+
+                val descriptions = try {
+                    resources.getStringArray(R.array.font_scale_descriptions).toList()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Font scale: couldn't load descriptions array", e)
+                    listOf()
+                }
+
+                val values = try {
+                    // Use getTextArray to defensively handle any odd resource cases
+                    val raw = resources.getTextArray(R.array.font_scale_values)
+                    raw.map { it?.toString() ?: "" }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Font scale: couldn't load values array", e)
+                    listOf()
+                }
+
+                // Build an effective values list: if resource values are missing/blank, fall back to canonical defaults
+                val effectiveValues: List<String> = run {
+                    val fallback = listOf("1.0", "1.75", "2.0")
+                    if (values.size == descriptions.size && values.none { it.isBlank() }) {
+                        values
+                    } else {
+                        Log.w(TAG, "Font scale: values array seems malformed or contains blanks, falling back to defaults")
+                        val take = minOf(fallback.size, descriptions.size)
+                        val newList = fallback.take(take).toMutableList()
+                        while (newList.size < descriptions.size) newList.add("1.0")
+                        newList
+                    }
+                }
+
+                // Log sizes to aid debugging
+                Log.i(TAG, "Font scale: descriptions.size=${descriptions.size}, values.size=${effectiveValues.size}")
+
+                // Debug Toast removed: arrays are now loaded and dropdown is populated via adapter
+
+                // Defensive check: ensure we have valid data before proceeding
+                if (descriptions.isNotEmpty() && values.size == descriptions.size) {
+                    // Compute current selection index
+                    var currentScale = 1.0f
+                    try {
+                        Log.i(TAG, "Font scale: about to read currentScale from preferences")
+                        currentScale = try {
+                            appPreferences.getFontScale()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Font scale: getFontScale() threw", e)
+                            1.0f
+                        }
+                        Log.i(TAG, "Font scale: read currentScale=$currentScale")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Font scale: unexpected error reading currentScale", e)
+                    }
+
+                    var fontPos = 0
+                    // Use safe accessors in case a resource entry is unexpectedly null at runtime.
+                    for (i in effectiveValues.indices) {
+                        val raw = effectiveValues.getOrNull(i)
+                        Log.i(TAG, "Font scale: values[$i]='$raw'")
+                        val v = raw?.toFloatOrNull() ?: 1.0f
+                        if (kotlin.math.abs(v - currentScale) < 0.01f) {
+                            fontPos = i
+                            break
+                        }
+                    }
+                    // Log the full mapping of descriptions -> values to catch any mismatch at runtime
+                    // mapping log intentionally removed for release
+
+                    // If the runtime view with id settings_font_scale is an AutoCompleteTextView, we can hide the spinner
+                    try {
+                        val runtimeViewProbe = binding.root.findViewById<View>(R.id.settings_font_scale)
+                        if (runtimeViewProbe is android.widget.AutoCompleteTextView) {
+                            try {
+                                val spinnerProbe = binding.root.findViewById<View>(R.id.settings_font_scale_spinner)
+                                spinnerProbe?.visibility = View.GONE
+                                Log.d(TAG, "Font scale init: detected runtime AutoCompleteTextView — hiding spinner immediately")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Font scale init: failed to hide spinner early", e)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+
+                    // Try to initialize the exposed dropdown. If it fails, we'll still initialize the Spinner fallback below.
+                    try {
+                        Log.d(TAG, "Font scale init: before dropdown adapter")
+                        // Ensure the exposed dropdown has an explicit adapter so it reliably shows items
+                        val dropdown = binding.settingsFontScale
+                        // Post the adapter assignment to avoid timing issues with Material components
+                        dropdown.post {
+                            try {
+                                val dropdownAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, descriptions)
+                                dropdown.setAdapter(dropdownAdapter)
+                                Log.d(TAG, "Font scale init: after dropdown adapter (posted)")
+                                // set current selection text
+                                dropdown.setText(descriptions.getOrNull(fontPos) ?: "", false)
+
+                                // Also handle the case where the runtime view with the same id is a Spinner (UI dump shows Spinner)
+                                try {
+                                    val runtimeView = binding.root.findViewById<View>(R.id.settings_font_scale)
+                                    val runtimeSpinner = runtimeView as? Spinner
+                                    if (runtimeSpinner != null) {
+                                        val spinnerAdapterRuntime = ArrayAdapter(this, android.R.layout.simple_spinner_item, descriptions)
+                                        spinnerAdapterRuntime.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+                                        runtimeSpinner.adapter = spinnerAdapterRuntime
+                                        // Prevent onItemSelected from firing immediately due to setSelection by ignoring the first callback
+                                        runtimeSpinner.setSelection(fontPos)
+                                        var runtimeSpinnerInitialized = false
+                                        runtimeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                                            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                                                if (!runtimeSpinnerInitialized) {
+                                                    runtimeSpinnerInitialized = true
+                                                    return
+                                                }
+                                                                        try {
+                                                                            // Resolve the selected description reliably from the adapter item
+                                                                            val selectedDesc = (parent?.getItemAtPosition(position) as? String)
+                                                                                ?: descriptions.getOrNull(position)
+                                                                                ?: ""
+                                                                            val resolvedIndex = descriptions.indexOf(selectedDesc).takeIf { it >= 0 } ?: position
+                                                                            val selected = effectiveValues.getOrNull(resolvedIndex) ?: "1.0"
+                                                                            val selectedFloat = selected.toFloatOrNull() ?: 1.0f
+                                                                            Log.i(TAG, "Font scale selection: handler=runtimeSpinner pos=$position desc='$selectedDesc' resolvedIndex=$resolvedIndex valueStr='$selected' value=$selectedFloat")
+                                                            // write preference off the UI thread and only if changed
+                                                            lifecycleScope.launch(Dispatchers.IO) {
+                                                                try {
+                                                                    val current = try { appPreferences.getFontScale() } catch (_: Throwable) { 1.0f }
+                                                                    if (kotlin.math.abs(current - selectedFloat) < 0.01f) {
+                                                                        Log.i(TAG, "Font scale: no change (current=$current), skipping write")
+                                                                        return@launch
+                                                                    }
+                                                                    appPreferences.setFontScale(selectedFloat)
+                                                                    Log.i(TAG, "Font scale: wrote $selectedFloat (from runtimeSpinner)")
+                                                                    // recreate on main thread after commit
+                                                                    withContext(Dispatchers.Main) {
+                                                                        try { runtimeSpinner.clearFocus() } catch (_: Throwable) {}
+                                                                        try {
+                                                                            if (!isFinishing && !isDestroyed) restartActivityWithoutAnimation()
+                                                                        } catch (_: Exception) {}
+                                                                    }
+                                                                } catch (e: Throwable) {
+                                                                    Log.e(TAG, "Font scale: runtimeSpinner write failed", e)
+                                                                }
+                                                            }
+                                                            // Clear focus on spinner to ensure popup is dismissed by the system
+                                                            try { runtimeSpinner.clearFocus() } catch (_: Throwable) {}
+                                                        } catch (e: Exception) {
+                                                            Log.e(TAG, "runtimeSpinner onItemSelected failed", e)
+                                                        }
+                                            }
+
+                                            override fun onNothingSelected(parent: AdapterView<*>?) {}
+                                        }
+
+                                        Log.i(TAG, "diagnostic: runtime Spinner with id settings_font_scale adapter set, count=${spinnerAdapterRuntime.count}")
+                                    } else {
+                                        Log.i(TAG, "diagnostic: runtime view with id settings_font_scale is ${runtimeView?.javaClass?.name}")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "diagnostic: failed to set adapter on runtime Spinner with id settings_font_scale", e)
+                                }
+
+                                // log adapter count after assignment
+                                try {
+                                    val a = dropdown.adapter
+                                    Log.i(TAG, "diagnostic: dropdown adapter count after set=${a?.count ?: "null"}")
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "diagnostic: couldn't read dropdown.adapter after set", e)
+                                }
+
+                                dropdown.setOnItemClickListener { parent, _, position, _ ->
+                                    try {
+                                        // Resolve description from adapter item to avoid relying on the numeric position which can differ
+                                        val selectedDesc = (parent?.getItemAtPosition(position) as? String)
+                                            ?: descriptions.getOrNull(position)
+                                            ?: ""
+                                        val resolvedIndex = descriptions.indexOf(selectedDesc).takeIf { it >= 0 } ?: position
+                                        val selected = effectiveValues.getOrNull(resolvedIndex) ?: "1.0"
+                                        val selectedFloat = selected.toFloatOrNull() ?: 1.0f
+                                                // minimal selection log
+                                                Log.d(TAG, "Font scale selection: desc='$selectedDesc' value=$selectedFloat")
+                                                // write preference and only restart after the write has completed to avoid a race
+                                                lifecycleScope.launch(Dispatchers.IO) {
+                                                    try {
+                                                        val current = try { appPreferences.getFontScale() } catch (_: Throwable) { 1.0f }
+                                                        if (kotlin.math.abs(current - selectedFloat) < 0.01f) {
+                                                            // no change, nothing to do
+                                                            return@launch
+                                                        }
+                                                        // write preference (non-suspending helper)
+                                                        appPreferences.setFontScale(selectedFloat)
+                                                        // After successful write, dismiss dropdown and restart on main thread
+                                                        withContext(Dispatchers.Main) {
+                                                            try { (dropdown as? android.widget.AutoCompleteTextView)?.dismissDropDown() } catch (_: Throwable) {}
+                                                            try {
+                                                                if (!isFinishing && !isDestroyed) restartActivityWithoutAnimation()
+                                                            } catch (_: Exception) {}
+                                                        }
+                                                    } catch (e: Throwable) {
+                                                        Log.e(TAG, "Font scale: dropdown write failed", e)
+                                                    }
+                                                }
+                                    } catch (e: Exception) {
+                                        // ignore malformed values
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Dropdown init for font scale failed (posted)", e)
+                            }
+                        }
+                        Log.d(TAG, "Font scale init: dropdown.post() done")
+                    } catch (e: Exception) {
+                        // guard against missing resources or parse errors — spinner fallback will still be initialized
+                        Log.e(TAG, "Dropdown init for font scale failed", e)
+                    }
+
+                    // Initialize spinner fallback (always). If the dropdown works correctly this will be hidden by style or layout
+                    // but initializing it ensures the user always sees a working control on device.
+                    try {
+                        Log.d(TAG, "Font scale init: before spinner init")
+                        val spinner = binding.root.findViewById<Spinner>(R.id.settings_font_scale_spinner)
+                        // Post spinner setup as well to avoid race conditions
+                        spinner.post {
+                            try {
+                                val spinnerAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, descriptions)
+                                spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+                                spinner.adapter = spinnerAdapter
+                                Log.d(TAG, "Font scale init: after spinner adapter (posted)")
+                                spinner.setSelection(fontPos)
+
+                                // If the runtime view for settings_font_scale is an AutoCompleteTextView (exposed dropdown),
+                                // hide the spinner so we don't show two controls for the same setting.
+                                try {
+                                    val runtimeView = binding.root.findViewById<View>(R.id.settings_font_scale)
+                                    if (runtimeView is android.widget.AutoCompleteTextView) {
+                                        spinner.visibility = View.GONE
+                                        Log.d(TAG, "Font scale init: runtime uses AutoCompleteTextView, hiding spinner")
+                                    } else {
+                                        spinner.visibility = View.VISIBLE
+                                        Log.d(TAG, "Font scale init: runtime does not use AutoCompleteTextView, showing spinner")
+                                    }
+                                } catch (e: Exception) {
+                                    // fallback to visible so the control remains usable
+                                    spinner.visibility = View.VISIBLE
+                                    Log.e(TAG, "Font scale init: couldn't determine runtime view class, showing spinner", e)
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Spinner init for font scale failed (posted)", e)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Spinner init for font scale failed", e)
+                    }
+                } else {
+                    Log.e(TAG, "Font scale: invalid descriptions or values array")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Font scale initialization failed", e)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Font scale initialization failed", e)
         }
 
         observeProxyType()
@@ -1515,6 +1872,34 @@ class SettingsActivity :
                 }
             }
         }
+    }
+
+    private fun restartActivityWithoutAnimation() {
+        try {
+            // suppress activity transition animations to reduce visual flash
+            val intent = intent
+            overridePendingTransition(0, 0)
+            startActivity(intent)
+            overridePendingTransition(0, 0)
+            finish()
+        } catch (e: Exception) {
+            try { recreate() } catch (_: Exception) {}
+        }
+    }
+
+    private fun updateFontScaleEnabled() {
+        val smartwatchModeEnabled = appPreferences.getSmartwatchModeEnabled()
+        
+        // Enable/disable font scale dropdown and spinner based on smartwatch mode
+        binding.fontScaleInputLayout.isEnabled = smartwatchModeEnabled
+        binding.settingsFontScale.isEnabled = smartwatchModeEnabled
+        binding.settingsFontScaleSpinner.isEnabled = smartwatchModeEnabled
+        
+        // Update alpha to visually indicate disabled state
+        val alpha = if (smartwatchModeEnabled) ENABLED_ALPHA else DISABLED_ALPHA
+        binding.fontScaleInputLayout.alpha = alpha
+        binding.settingsFontScale.alpha = alpha
+        binding.settingsFontScaleSpinner.alpha = alpha
     }
 
     companion object {

@@ -67,7 +67,24 @@ public class OutcomingPreviewMessageViewHolder extends PreviewMessageViewHolder 
 
             float textSize = 0;
             if (context != null) {
-                textSize = context.getResources().getDimension(R.dimen.chat_text_size);
+                // base text size in pixels from resources (dimens defined in sp)
+                float baseTextPx = context.getResources().getDimension(R.dimen.chat_text_size);
+                // try to read app font scale from AppPreferencesImpl, fallback to system font scale
+                // Only if smartwatch mode is enabled
+                boolean smartwatchMode = false;
+                float fontScale = 1.0f;
+                try {
+                    com.nextcloud.talk.utils.preferences.AppPreferencesImpl prefs = new com.nextcloud.talk.utils.preferences.AppPreferencesImpl(context);
+                    smartwatchMode = prefs.getSmartwatchModeEnabled();
+                    if (smartwatchMode) {
+                        fontScale = prefs.getFontScale();
+                    } else {
+                        fontScale = 1.0f; // master behavior - no scaling
+                    }
+                } catch (Throwable t) {
+                    fontScale = smartwatchMode ? context.getResources().getConfiguration().fontScale : 1.0f;
+                }
+                textSize = baseTextPx * fontScale;
             }
             HashMap<String, HashMap<String, String>> messageParameters = message.getMessageParameters();
             if (

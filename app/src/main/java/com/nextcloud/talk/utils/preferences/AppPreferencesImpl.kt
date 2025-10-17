@@ -23,10 +23,16 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
+import android.util.Log
+import android.content.SharedPreferences
 
 @ExperimentalCoroutinesApi
 @Suppress("TooManyFunctions", "DeferredResultUnused", "EmptyFunctionBlock")
 class AppPreferencesImpl(val context: Context) : AppPreferences {
+
+    // small write-through cache to speed up synchronous reads from attachBaseContext
+    // and to publish a simple version stamp when font scale changes
+    private val prefs: SharedPreferences = context.getSharedPreferences("settings_cache", Context.MODE_PRIVATE)
 
     override fun getProxyType(): String =
         runBlocking {
@@ -592,7 +598,85 @@ class AppPreferencesImpl(val context: Context) : AppPreferences {
             }
         }
 
+    // Smartwatch mode preference accessors
+    override fun getSmartwatchModeEnabled(): Boolean =
+        runBlocking {
+            async { readBoolean(SMARTWATCH_MODE_ENABLED, false).first() }
+        }.getCompleted()
+
+    override fun setSmartwatchModeEnabled(enabled: Boolean) {
+        runBlocking<Unit> {
+            async { writeBoolean(SMARTWATCH_MODE_ENABLED, enabled) }
+        }
+    }
+
+    override fun removeSmartwatchModeEnabled() {
+        runBlocking<Unit> {
+            async { writeBoolean(SMARTWATCH_MODE_ENABLED, false) }
+        }
+    }
+
+    // Preferred audio device when Smartwatch mode is enabled (only speaker/earpiece)
+    override fun getPreferredAudioDevice(): String =
+        runBlocking {
+            async { readString(PREFERRED_AUDIO_DEVICE, "SPEAKER_PHONE").first() }
+        }.getCompleted()
+
+    override fun setPreferredAudioDevice(deviceName: String) {
+        runBlocking<Unit> {
+            async { writeString(PREFERRED_AUDIO_DEVICE, deviceName) }
+        }
+    }
+
+    override fun removePreferredAudioDevice() {
+        runBlocking<Unit> {
+            async { writeString(PREFERRED_AUDIO_DEVICE, "SPEAKER_PHONE") }
+        }
+    }
+
     override fun clear() {}
+
+    // Font scale preference accessors
+    override fun getFontScale(): Float =
+        runBlocking {
+            async { readFloat(FONT_SCALE, 1.0f).first() }
+        }.getCompleted()
+
+    // Keep synchronous signature for interface compatibility but avoid blocking the caller
+    override fun setFontScale(value: Float) {
+        // write on a background thread to avoid blocking the caller (best-effort)
+        Thread {
+            try {
+                runBlocking { writeFloat(FONT_SCALE, value) }
+            } catch (_: Exception) {
+                // swallow errors
+            }
+        }.start()
+    }
+
+    // New suspend helper for callers that can call suspending functions
+    suspend fun setFontScaleAsync(value: Float) {
+        writeFloat(FONT_SCALE, value)
+        try {
+            // write-through cache to SharedPreferences so attachBaseContext can read fast
+            // and write a small version/timestamp so Activities can detect changes
+            prefs.edit().putFloat(FONT_SCALE, value).putLong(FONT_SCALE_VERSION, System.currentTimeMillis()).apply()
+            Log.d(TAG, "setFontScaleAsync: wrote cache value=$value version=${prefs.getLong(FONT_SCALE_VERSION,0)}")
+        } catch (_: Exception) {
+            // best-effort; ignore failures
+        }
+    }
+    fun hasCachedFontScale(): Boolean = prefs.contains(FONT_SCALE)
+
+    fun getCachedFontScaleVersion(): Long = prefs.getLong(FONT_SCALE_VERSION, 0L)
+
+    fun hasCachedFontScaleVersion(): Boolean = prefs.contains(FONT_SCALE_VERSION)
+
+    override fun removeFontScale() {
+        runBlocking<Unit> {
+            async { writeString(FONT_SCALE, "") }
+        }
+    }
 
     private suspend fun writeString(key: String, value: String) =
         context.dataStore.edit { settings ->
@@ -629,6 +713,28 @@ class AppPreferencesImpl(val context: Context) : AppPreferences {
         context.dataStore.data.map { preferences ->
             preferences[booleanPreferencesKey(key)] ?: defaultValue
         }
+
+    // Float stored as String because DataStore Preferences doesn't provide float key helper
+    fun readFloat(key: String, defaultValue: Float = 1.0f): Flow<Float> =
+        context.dataStore.data.map { preferences ->
+            val stringVal = preferences[stringPreferencesKey(key)] ?: ""
+            if (stringVal.isEmpty()) defaultValue else try {
+                stringVal.toFloat()
+            } catch (e: NumberFormatException) {
+                defaultValue
+            }
+        }
+
+    private suspend fun writeFloat(key: String, value: Float) {
+        try {
+            Log.d(TAG, "writeFloat: writing key=$key value=$value")
+            context.dataStore.edit { settings ->
+                settings[stringPreferencesKey(key)] = value.toString()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "writeFloat: failed to write $key", e)
+        }
+    }
 
     private suspend fun writeLong(key: String, value: Long) =
         context.dataStore.edit { settings ->
@@ -677,6 +783,10 @@ class AppPreferencesImpl(val context: Context) : AppPreferences {
         const val CONVERSATION_LIST_POSITION_OFFSET = "CONVERSATION_LIST_POSITION_OFFSET"
         const val IMAGE_COMPRESSION_LEVEL = "image_compression_level"
         const val VIDEO_COMPRESSION_LEVEL = "video_compression_level"
+        const val SMARTWATCH_MODE_ENABLED = "smartwatch_mode_enabled"
+        const val FONT_SCALE = "font_scale"
+        const val FONT_SCALE_VERSION = "font_scale_version"
+        const val PREFERRED_AUDIO_DEVICE = "preferred_audio_device"
         private fun String.convertStringToArray(): Array<Float> {
             var varString = this
             val floatList = mutableListOf<Float>()

@@ -187,6 +187,93 @@
 
                 </com.google.android.material.textfield.TextInputLayout>
 
+                <!-- Smartwatch Mode Toggle - enables/disables font scaling feature -->
+                <LinearLayout
+                    android:id="@+id/settings_smartwatch_mode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:padding="@dimen/standard_padding"
+                    android:layout_marginTop="@dimen/standard_half_margin"
+                    android:background="?android:attr/selectableItemBackground">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textSize="@dimen/headline_text_size"
+                            android:text="@string/nc_settings_smartwatch_mode_title"/>
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/nc_settings_smartwatch_mode_desc"/>
+                    </LinearLayout>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/settings_smartwatch_mode_switch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:clickable="false"/>
+                </LinearLayout>
+
+                <!-- Preferred audio output for Smartwatch mode: only SPEAKER/EARPIECE -->
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/settings_smartwatch_audio_output_layout"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/standard_half_margin"
+                    android:layout_marginHorizontal="@dimen/standard_margin"
+                    android:hint="@string/nc_settings_smartwatch_audio_output_title">
+
+                    <com.google.android.material.textfield.MaterialAutoCompleteTextView
+                        android:id="@+id/settings_smartwatch_audio_output"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="none"
+                        android:lines="1"
+                        android:popupTheme="@style/ThemeOverlay.AppTheme.PopupMenu"
+                        android:text="" />
+
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <!-- Font scale setting (hidden, Spinner used as primary control) -->
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/font_scale_input_layout"
+                    android:visibility="visible"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/standard_half_margin"
+                    android:layout_marginHorizontal="@dimen/standard_margin"
+                    android:hint="@string/nc_settings_font_scale_title">
+
+                    <com.google.android.material.textfield.MaterialAutoCompleteTextView
+                        android:id="@+id/settings_font_scale"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="none"
+                        android:lines="1"
+                        android:popupTheme="@style/ThemeOverlay.AppTheme.PopupMenu"
+                        android:text="" />
+
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <!-- Visible Spinner fallback when dropdown fails to show -->
+                <Spinner
+                    android:id="@+id/settings_font_scale_spinner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/standard_half_margin"
+                    android:layout_marginHorizontal="@dimen/standard_margin" />
+
             </LinearLayout>
 
             <LinearLayout

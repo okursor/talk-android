@@ -15,6 +15,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.View
+import android.util.TypedValue
+import android.widget.ImageView
 import androidx.core.app.NotificationManagerCompat
 import autodagger.AutoInjector
 import com.nextcloud.talk.R
@@ -168,6 +170,21 @@ class CallNotificationActivity : CallBaseActivity() {
                 Log.e(TAG, "Failed to evict cache")
             }
         }
+        // Apply icon/button scaling according to current fontScale
+        // Only if smartwatch mode is enabled
+        try {
+            val smartwatchMode = try {
+                com.nextcloud.talk.utils.preferences.AppPreferencesImpl(this).getSmartwatchModeEnabled()
+            } catch (_: Throwable) {
+                false
+            }
+            if (smartwatchMode) {
+                val fontScale = resources.configuration.fontScale
+                applyIncomingButtonScaling(fontScale)
+            }
+        } catch (_: Throwable) {
+            // ignore
+        }
     }
 
     private fun initClickListeners() {
@@ -182,6 +199,43 @@ class CallNotificationActivity : CallBaseActivity() {
             proceedToCall()
         }
         binding!!.hangupButton.setOnClickListener { hangup() }
+    }
+
+    private fun dpToPx(dp: Float): Int {
+        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp, resources.displayMetrics).toInt()
+    }
+
+    private fun applyIncomingButtonScaling(fontScale: Float) {
+        val baseIncomingDp = 60f
+        val incomingDp = kotlin.math.max(48f, baseIncomingDp * fontScale)
+        val incomingPx = dpToPx(incomingDp)
+
+        val incomingButtons = listOfNotNull(
+            binding?.callAnswerVoiceOnlyView,
+            binding?.hangupButton,
+            binding?.callAnswerCameraView
+        )
+
+        for (btn in incomingButtons) {
+            val lp = btn.layoutParams
+            lp.width = incomingPx
+            lp.height = incomingPx
+            btn.layoutParams = lp
+
+            // icon size: don't exceed base minus padding
+            val maxIconDp = baseIncomingDp - 8f
+            val iconDp = kotlin.math.min(maxIconDp, incomingDp - 8f)
+            val iconPx = dpToPx(iconDp)
+
+            if (btn is ImageView) {
+                btn.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                val drawable = btn.drawable
+                if (drawable != null) {
+                    val bd = com.nextcloud.talk.utils.IconScaler.getScaledDrawable(this, drawable, iconPx, iconPx)
+                    btn.setImageDrawable(bd)
+                }
+            }
+        }
     }
 
     private fun hangup() {
