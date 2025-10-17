@@ -151,7 +151,7 @@ class CallNotificationActivity : CallBaseActivity() {
         val notificationHandler = Handler(Looper.getMainLooper())
         notificationHandler.post(object : Runnable {
             override fun run() {
-                if (NotificationUtils.isNotificationVisible(context, notificationTimestamp!!.toInt())) {
+                if (NotificationUtils.isNotificationVisible(context, NotificationUtils.INCOMING_CALL_NOTIFICATION_ID)) {
                     notificationHandler.postDelayed(this, ONE_SECOND)
                 } else {
                     finish()
@@ -190,11 +190,15 @@ class CallNotificationActivity : CallBaseActivity() {
     private fun initClickListeners() {
         binding!!.callAnswerVoiceOnlyView.setOnClickListener {
             Log.d(TAG, "accept call (voice only)")
+            // Cancel notification immediately when answering
+            NotificationUtils.cancelIncomingCallNotification(this)
             intent.putExtra(KEY_CALL_VOICE_ONLY, true)
             proceedToCall()
         }
         binding!!.callAnswerCameraView.setOnClickListener {
             Log.d(TAG, "accept call (with video)")
+            // Cancel notification immediately when answering
+            NotificationUtils.cancelIncomingCallNotification(this)
             intent.putExtra(KEY_CALL_VOICE_ONLY, false)
             proceedToCall()
         }
@@ -239,6 +243,8 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     private fun hangup() {
+        // Cancel notification immediately when rejecting
+        NotificationUtils.cancelIncomingCallNotification(this)
         leavingScreen = true
         finish()
     }
@@ -253,8 +259,8 @@ class CallNotificationActivity : CallBaseActivity() {
     private fun isInCallWithVideo(callFlag: Int): Boolean = (callFlag and Participant.InCallFlags.WITH_VIDEO) > 0
 
     override fun onStop() {
-        val notificationManager = NotificationManagerCompat.from(context)
-        notificationManager.cancel(notificationTimestamp!!)
+        // Cancel notification using the constant ID
+        NotificationUtils.cancelIncomingCallNotification(this)
         super.onStop()
     }
 

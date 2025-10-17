@@ -490,6 +490,9 @@ class CallActivity : CallBaseActivity() {
         super.onCreate(savedInstanceState)
         sharedApplication!!.componentApplication.inject(this)
 
+        // Cancel any incoming call notification since we're now in the call
+        com.nextcloud.talk.utils.NotificationUtils.cancelIncomingCallNotification(this)
+
         rootEglBase = EglBase.create()
         binding = CallActivityBinding.inflate(layoutInflater)
         setContentView(binding!!.root)

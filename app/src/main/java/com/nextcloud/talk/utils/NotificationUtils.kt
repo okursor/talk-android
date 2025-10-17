@@ -48,6 +48,9 @@ object NotificationUtils {
     const val DEFAULT_MESSAGE_RINGTONE_URI =
         "android.resource://" + BuildConfig.APPLICATION_ID + "/raw/librem_by_feandesign_message"
 
+    // Notification IDs
+    const val INCOMING_CALL_NOTIFICATION_ID = 1
+
     // RemoteInput key - used for replies sent directly from notification
     const val KEY_DIRECT_REPLY = "key_direct_reply"
 
@@ -340,6 +343,15 @@ object NotificationUtils {
         context.imageLoader.executeBlocking(request)
 
         return avatarIcon
+    }
+
+    /**
+     * Cancel all incoming call notifications
+     */
+    fun cancelIncomingCallNotification(context: Context) {
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(INCOMING_CALL_NOTIFICATION_ID)
+        Log.d(TAG, "Cancelled incoming call notification with ID: $INCOMING_CALL_NOTIFICATION_ID")
     }
 
     private data class Channel(val id: String, val name: String, val description: String, val isImportant: Boolean)

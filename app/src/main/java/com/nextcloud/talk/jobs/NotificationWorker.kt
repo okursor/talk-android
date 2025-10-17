@@ -294,7 +294,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     .build()
             notification.flags = notification.flags or Notification.FLAG_INSISTENT
 
-            sendNotification(pushMessage.timestamp.toInt(), notification)
+            // Use constant notification ID for easy cancellation
+            sendNotification(NotificationUtils.INCOMING_CALL_NOTIFICATION_ID, notification)
 
             checkIfCallIsActive(signatureVerification, conversation)
         }
@@ -903,18 +904,18 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     }
                     if (inCallOnDifferentDevice) {
                         Log.d(TAG, "inCallOnDifferentDevice is true")
-                        removeNotification(pushMessage.timestamp.toInt())
+                        removeNotification(NotificationUtils.INCOMING_CALL_NOTIFICATION_ID)
                     }
 
                     if (!hasParticipantsInCall) {
                         showMissedCallNotification(conversation)
                         Log.d(TAG, "no participants in call")
-                        removeNotification(pushMessage.timestamp.toInt())
+                        removeNotification(NotificationUtils.INCOMING_CALL_NOTIFICATION_ID)
                     }
 
                     isCallNotificationVisible = NotificationUtils.isNotificationVisible(
                         context,
-                        pushMessage.timestamp.toInt()
+                        NotificationUtils.INCOMING_CALL_NOTIFICATION_ID
                     )
                 }
 
@@ -923,7 +924,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     if (isCallNotificationVisible) {
                         showMissedCallNotification(conversation)
                     }
-                    removeNotification(pushMessage.timestamp.toInt())
+                    removeNotification(NotificationUtils.INCOMING_CALL_NOTIFICATION_ID)
                 }
 
                 override fun onComplete() {
@@ -932,7 +933,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                         showMissedCallNotification(conversation)
                     }
 
-                    removeNotification(pushMessage.timestamp.toInt())
+                    removeNotification(NotificationUtils.INCOMING_CALL_NOTIFICATION_ID)
                 }
             })
     }
@@ -940,7 +941,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     fun showMissedCallNotification(conversation: ConversationModel) {
         val isOngoingCallNotificationVisible = NotificationUtils.isNotificationVisible(
             context,
-            pushMessage.timestamp.toInt()
+            NotificationUtils.INCOMING_CALL_NOTIFICATION_ID
         )
 
         if (isOngoingCallNotificationVisible) {
